@@ -1,0 +1,14 @@
+.env
+.env.local
+.env.*.local
+.codegraph/
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+.DS_Store
+Thumbs.db
+*.log
+analysis_report_*.json

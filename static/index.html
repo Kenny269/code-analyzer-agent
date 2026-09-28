@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Code Analyzer Agent</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <h1>Code Analyzer Agent</h1>
+    <p class="subtitle">遗留系统智能分析 · 代码结构 + 业务规则</p>
+  </header>
+
+  <main>
+    <section class="card">
+      <div class="field">
+        <label for="projectPath">项目路径 / Git 仓库 URL</label>
+        <input type="text" id="projectPath" placeholder="/path/to/project 或 https://github.com/user/repo">
+      </div>
+
+      <div class="field">
+        <label for="request">分析请求</label>
+        <input type="text" id="request" value="提取这个系统的业务规则">
+      </div>
+
+      <div class="field">
+        <label for="reportDir">报告保存位置 <span class="hint">（留空则保存在项目目录下）</span></label>
+        <input type="text" id="reportDir" placeholder="默认：项目目录">
+      </div>
+
+      <button id="runBtn">开始分析</button>
+      <div class="status" id="status"></div>
+    </section>
+
+    <section class="card" id="resultCard" style="display:none;">
+      <div class="result-header">
+        <h2>分析结果</h2>
+        <span class="report-path" id="reportPath"></span>
+      </div>
+      <div id="resultContent"></div>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>
