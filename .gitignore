@@ -12,3 +12,5 @@ env/
 Thumbs.db
 *.log
 analysis_report_*.json
+.cursor/
+.vscode/

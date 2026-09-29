@@ -73,6 +73,8 @@ class KeywordSelector:
 
 
 class Orchestrator:
+    """核心调度器。加载技能、选择技能、执行技能、返回结构化结果。"""
+
     def __init__(self, skills_root: str, llm: Optional[LLMClient] = None):
         self.loader = SkillLoader(skills_root)
         self.runner = SkillRunner()
@@ -85,24 +87,41 @@ class Orchestrator:
             self.selector = KeywordSelector()
 
     def load_skills(self) -> List[SkillMeta]:
+        """扫描 skills/ 目录，加载所有技能。"""
         self.skills = self.loader.discover()
         return self.skills
 
+    def list_skills(self) -> List[dict]:
+        """返回技能的元数据列表，供外部展示。"""
+        if not self.skills:
+            self.load_skills()
+        return [
+            {"name": s.name, "description": s.description}
+            for s in self.skills
+        ]
+
     def select_skills(self, user_request: str) -> List[SkillMeta]:
+        """根据用户请求选择技能。"""
         return self.selector.select(user_request, self.skills)
 
     def execute(self, skill: SkillMeta, input_data: dict) -> Any:
+        """执行单个技能。"""
         return self.runner.run(skill, input_data)
 
     def run(self, user_request: str, project_path: str) -> dict:
+        """
+        完整流程：选择技能 → 按顺序执行 → 返回结构化结果。
+        返回的 dict 包含 success、steps、summary 三个字段。
+        """
         if not self.skills:
             self.load_skills()
 
         skills_to_run = self.select_skills(user_request)
         if not skills_to_run:
             return {
+                "success": False,
                 "error": "no matching skill",
-                "available": [s.name for s in self.skills],
+                "available_skills": [s.name for s in self.skills],
             }
 
         previous_results = {}
@@ -125,9 +144,12 @@ class Orchestrator:
                 if result.get("status") == "success":
                     previous_results[skill.name] = result.get("data", {})
 
-        if len(steps) == 1:
-            output = dict(steps[0])
-        else:
-            output = {"steps": steps}
-        output["_meta"] = {"skill_tokens": skill_tokens}
+        output = {
+            "success": True,
+            "steps": steps if len(steps) > 1 else steps[0],
+            "summary": {
+                "skills_run": [s.name for s in skills_to_run],
+                "total_tokens": skill_tokens,
+            },
+        }
         return output

@@ -42,6 +42,49 @@ main {
   margin-bottom: 24px;
 }
 
+/* ---- 技能展示区 ---- */
+
+.skills-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 24px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid #eef1f5;
+  flex-wrap: wrap;
+}
+
+.skills-label {
+  font-size: 13px;
+  color: #8a95a6;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.skills-list {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.skill-tag {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 12px;
+  background: #eef3fb;
+  color: #4a7bbf;
+  font-size: 12px;
+  font-family: "SF Mono", Consolas, monospace;
+  cursor: help;
+}
+
+.skills-loading {
+  font-size: 12px;
+  color: #b0bfd0;
+}
+
+/* ---- 表单 ---- */
+
 .field { margin-bottom: 20px; }
 
 .field label {
@@ -100,6 +143,8 @@ button:disabled { background: #b0bfd0; cursor: not-allowed; }
 
 .status.error { color: #d9534f; }
 .status.success { color: #3c9a5f; }
+
+/* ---- 结果区 ---- */
 
 .result-header {
   display: flex;

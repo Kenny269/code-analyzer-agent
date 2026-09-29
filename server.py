@@ -32,6 +32,8 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_file(os.path.join(STATIC_DIR, "style.css"), "text/css")
         elif parsed.path == "/app.js":
             self._serve_file(os.path.join(STATIC_DIR, "app.js"), "application/javascript")
+        elif parsed.path == "/api/skills":
+            self._handle_skills()
         elif parsed.path == "/api/report":
             self._serve_report(parsed)
         else:
@@ -66,6 +68,16 @@ class Handler(BaseHTTPRequestHandler):
         with open(path, "r", encoding="utf-8") as f:
             content = f.read()
         self._send_json(200, {"content": content})
+
+    # ---- 技能列表 ----
+
+    def _handle_skills(self):
+        try:
+            orch = Orchestrator(SKILLS_ROOT, llm=None)
+            orch.load_skills()
+            self._send_json(200, {"skills": orch.list_skills()})
+        except Exception as e:
+            self._send_json(500, {"error": str(e)})
 
     # ---- 分析接口 ----
 

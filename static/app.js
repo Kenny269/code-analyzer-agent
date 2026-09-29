@@ -6,6 +6,31 @@ const reportPathEl = document.getElementById('reportPath');
 
 runBtn.addEventListener('click', runAnalysis);
 
+// 页面加载时拉取技能列表
+loadSkills();
+
+async function loadSkills() {
+  try {
+    const resp = await fetch('/api/skills');
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const skills = data.skills || [];
+    const container = document.getElementById('skillList');
+    if (container && skills.length > 0) {
+      container.innerHTML = '';
+      skills.forEach(s => {
+        const tag = document.createElement('span');
+        tag.className = 'skill-tag';
+        tag.textContent = s.name;
+        tag.title = s.description;
+        container.appendChild(tag);
+      });
+    }
+  } catch (e) {
+    // 拉取失败不影响主流程
+  }
+}
+
 async function runAnalysis() {
   const projectPath = document.getElementById('projectPath').value.trim();
   const request = document.getElementById('request').value.trim();
@@ -57,66 +82,87 @@ function renderResult(result, reportPath) {
   reportPathEl.textContent = reportPath ? '报告：' + reportPath : '';
   resultContent.innerHTML = '';
 
+  // 从新结构中提取 rules
   const rules = extractRules(result);
-
   if (rules.length > 0) {
-    rules.forEach(rule => {
-      const item = document.createElement('div');
-      item.className = 'rule-item';
-
-      const id = document.createElement('div');
-      id.className = 'rule-id';
-      id.textContent = rule.id || '';
-
-      const desc = document.createElement('div');
-      desc.className = 'rule-desc';
-      desc.textContent = rule.description || '';
-
-      const meta = document.createElement('div');
-      meta.className = 'rule-meta';
-
-      if (rule.category) {
-        const cat = document.createElement('span');
-        cat.className = 'rule-category';
-        cat.textContent = rule.category;
-        meta.appendChild(cat);
-      }
-      if (rule.code_reference && rule.code_reference.file) {
-        const ref = document.createElement('span');
-        const line = rule.code_reference.line_start || '';
-        ref.textContent = `${rule.code_reference.file}:${line}`;
-        meta.appendChild(ref);
-      }
-
-      item.appendChild(id);
-      item.appendChild(desc);
-      item.appendChild(meta);
-      resultContent.appendChild(item);
-    });
+    rules.forEach(rule => renderRule(rule));
     return;
   }
 
+  // 其他类型的结果直接展示 JSON
   const pre = document.createElement('pre');
   pre.textContent = JSON.stringify(result, null, 2);
   resultContent.appendChild(pre);
 }
 
+function renderRule(rule) {
+  const item = document.createElement('div');
+  item.className = 'rule-item';
+
+  const id = document.createElement('div');
+  id.className = 'rule-id';
+  id.textContent = rule.id || '';
+
+  const desc = document.createElement('div');
+  desc.className = 'rule-desc';
+  desc.textContent = rule.description || '';
+
+  const meta = document.createElement('div');
+  meta.className = 'rule-meta';
+
+  if (rule.category) {
+    const cat = document.createElement('span');
+    cat.className = 'rule-category';
+    cat.textContent = rule.category;
+    meta.appendChild(cat);
+  }
+  if (rule.code_reference && rule.code_reference.file) {
+    const ref = document.createElement('span');
+    const line = rule.code_reference.line_start || '';
+    ref.textContent = `${rule.code_reference.file}:${line}`;
+    meta.appendChild(ref);
+  }
+
+  item.appendChild(id);
+  item.appendChild(desc);
+  item.appendChild(meta);
+  resultContent.appendChild(item);
+}
+
+/**
+ * 从新的返回结构中提取业务规则列表。
+ * 返回结构可能是：
+ *   { success, steps: { skill, result: { data: { rules } } }, summary }
+ * 或：
+ *   { success, steps: [ { skill, result }, ... ], summary }
+ */
 function extractRules(result) {
   if (!result) return [];
 
-  if (result.result && result.result.data &&
-      Array.isArray(result.result.data.rules)) {
-    return result.result.data.rules;
+  const steps = result.steps;
+
+  // 单技能：steps 是一个对象
+  if (steps && !Array.isArray(steps)) {
+    const rules = getRulesFromStep(steps);
+    if (rules.length > 0) return rules;
   }
 
-  if (Array.isArray(result.steps)) {
-    for (const step of result.steps) {
-      if (step.result && step.result.data &&
-          Array.isArray(step.result.data.rules)) {
-        return step.result.data.rules;
-      }
+  // 多技能：steps 是数组
+  if (Array.isArray(steps)) {
+    for (const step of steps) {
+      const rules = getRulesFromStep(step);
+      if (rules.length > 0) return rules;
     }
   }
 
+  return [];
+}
+
+function getRulesFromStep(step) {
+  if (!step || !step.result) return [];
+  const data = step.result.data;
+  if (data && Array.isArray(data.rules)) {
+    return data.rules;
+  }
   return [];
 }

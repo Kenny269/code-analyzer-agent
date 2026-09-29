@@ -2,6 +2,8 @@
 
 一个面向遗留系统的智能代码分析 Agent。既能给技术人员看代码结构，也能给业务人员看业务逻辑。
 
+支持三种调用方式：**命令行**、**Web 界面**、**MCP 协议**（可接入 Cursor / VS Code / Claude Code 等 AI IDE）。
+
 ---
 
 ## 项目简介
@@ -23,58 +25,75 @@
 ### 架构分层
 
 ```
-┌─────────────────────────────────────────────────┐
-│  入口层                                          │
-│  main.py (CLI)  │  server.py (Web)              │
-└────────────────┬────────────────────────────────┘
-                 │
-                 ▼
-┌─────────────────────────────────────────────────┐
-│  编排层                                          │
-│  orchestrator.py                                │
-│  - 加载所有技能                                  │
-│  - 根据用户请求选择技能（LLM 语义匹配）            │
-│  - 按顺序执行技能，串联上下文                     │
-│  - 汇总 token 消耗                              │
-└────────────────┬────────────────────────────────┘
-                 │
-                 ▼
-┌─────────────────────────────────────────────────┐
-│  技能执行层                                      │
-│  skill_loader.py  │  skill_runner.py            │
-│  - 扫描 skills/ 目录                            │
-│  - 解析 SKILL.md 元数据                         │
-│  - 以子进程执行技能脚本                          │
-│  - 通过 stdin/stdout JSON 通信                  │
-└────────────────┬────────────────────────────────┘
-                 │
-                 ▼
-┌─────────────────────────────────────────────────┐
-│  技能层 skills/                                  │
-│  每个技能是独立目录，包含 SKILL.md + scripts/     │
-│  - project-structure                            │
-│  - call-chain                                   │
-│  - impact-analysis                              │
-│  - business-rule-extraction                     │
-│  - report-generation                            │
-└────────────────┬────────────────────────────────┘
-                 │
-                 ▼
-┌─────────────────────────────────────────────────┐
-│  共享工具层                                      │
-│  codegraph_client.py  │  llm_client.py          │
-│  - CodeGraph CLI 封装（代码图查询）              │
-│  - LLM 调用封装（DeepSeek / OpenAI 兼容）        │
-└─────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│  入口层                                                      │
+│  main.py (CLI)  │  server.py (Web)  │  mcp_server.py (MCP)  │
+└─────────────────────────┬───────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│  编排层                                                      │
+│  orchestrator.py                                            │
+│  - 加载所有技能                                              │
+│  - 根据用户请求选择技能（LLM 语义匹配 / 关键词回退）           │
+│  - 按顺序执行技能，串联上下文                                 │
+│  - 汇总 token 消耗                                          │
+│  - 返回结构化 dict（不再直接打印 JSON）                       │
+└─────────────────────────┬───────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│  技能执行层                                                  │
+│  skill_loader.py  │  skill_runner.py                        │
+│  - 扫描 skills/ 目录                                        │
+│  - 解析 SKILL.md 元数据                                     │
+│  - 以子进程执行技能脚本                                      │
+│  - 通过 stdin/stdout JSON 通信                              │
+└─────────────────────────┬───────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│  技能层 skills/                                              │
+│  每个技能是独立目录，包含 SKILL.md + scripts/                 │
+│  - project-structure                                        │
+│  - call-chain                                               │
+│  - impact-analysis                                          │
+│  - business-rule-extraction                                 │
+│  - report-generation                                        │
+└─────────────────────────┬───────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│  共享工具层                                                  │
+│  codegraph_client.py  │  llm_client.py                      │
+│  - CodeGraph CLI 封装（代码图查询）                          │
+│  - LLM 调用封装（DeepSeek / OpenAI 兼容）                    │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ### 模块耦合关系
 
-**入口层**只负责接收用户输入，不做任何业务逻辑。`main.py` 解析命令行参数，`server.py` 解析 HTTP 请求，二者都把 `project_path` + `user_request` 传给编排器。
+**入口层**负责接收用户输入，不做业务逻辑，只是把 `project_path` + `user_request` 传给编排器。
+
+- `main.py`：解析命令行参数
+- `server.py`：解析 HTTP 请求，提供 Web 界面和 REST API
+- `mcp_server.py`：实现 MCP 协议，把能力暴露为 MCP 工具，供 AI IDE 调用
+
+三个入口共用同一个 `Orchestrator` 实例。
 
 **编排层**是系统的核心调度中心。它启动时通过 `skill_loader` 扫描 `skills/` 目录，把所有技能的元数据（`name` + `description`）读入内存。用户请求到来时，通过 LLM 语义匹配选出最相关的技能（一个或多个）。如果 LLM 不可用，则回退到关键词匹配。
 
-**技能执行层**负责以子进程方式运行技能脚本。每个技能脚本从 `stdin` 读 JSON，向 `stdout` 写 JSON。这样做的好处是技能之间完全隔离，任何技能崩溃都不会影响编排器，且技能可以用任意语言实现。技能脚本输出中的 `_meta.tokens` 字段会被编排器收集，用于汇总 token 消耗。
+`orchestrator.run()` 返回结构化的 dict：
+
+```python
+{
+  "success": True,
+  "steps": {"skill": "...", "result": {...}} 或 [ {...}, {...} ],
+  "summary": {"skills_run": [...], "total_tokens": 1234}
+}
+```
+
+**技能执行层**以子进程方式运行技能脚本。每个技能脚本从 `stdin` 读 JSON，向 `stdout` 写 JSON。这样做的好处是技能之间完全隔离，任何技能崩溃都不会影响编排器，且技能可以用任意语言实现。技能脚本输出中的 `_meta.tokens` 字段会被编排器收集，用于汇总 token 消耗。
 
 **技能层**是能力的具体实现。每个技能是一个独立目录，包含 `SKILL.md`（元数据 + 执行说明）和 `scripts/`（实现代码）。新增技能不需要改任何核心代码，只需在 `skills/` 下新建目录。技能之间的数据传递通过 `previous_results` 字段：前一个技能的 `data` 会被塞入下一个技能的输入。
 
@@ -112,10 +131,12 @@ Orchestrator.run()
 code_analyzing_agent/
 ├── main.py                          # CLI 入口
 ├── server.py                        # Web 入口
+├── mcp_server.py                    # MCP 入口（IDE 集成）
 ├── .env                             # 配置（不提交）
 ├── .env.example                     # 配置模板
 ├── .gitignore
 ├── README.md
+├── Plan.md                          # 项目规划文档
 ├── agent/
 │   ├── __init__.py
 │   ├── orchestrator.py              # 编排器 + 技能选择
@@ -139,10 +160,14 @@ code_analyzing_agent/
 │   └── report-generation/
 │       ├── SKILL.md
 │       └── scripts/analyze.py
-└── static/
-    ├── index.html                   # Web 前端页面
-    ├── style.css
-    └── app.js
+├── static/
+│   ├── index.html                   # Web 前端页面
+│   ├── style.css
+│   └── app.js
+├── .cursor/
+│   └── mcp.json                     # Cursor MCP 配置（不提交）
+└── .vscode/
+    └── mcp.json                     # VS Code MCP 配置（不提交）
 ```
 
 ---
@@ -153,11 +178,12 @@ code_analyzing_agent/
 - CodeGraph（`codegraph` 命令在 PATH 中可用）
 - Git（如果分析 Git 仓库）
 - DeepSeek API Key（或任何 OpenAI 兼容的模型服务）
+- Node.js（可选，用于运行 MCP Inspector 调试工具）
 
 安装 Python 依赖：
 
 ```bash
-pip3 install openai python-dotenv -i https://pypi.tuna.tsinghua.edu.cn/simple
+pip3 install openai python-dotenv "mcp[cli]" -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
 安装 CodeGraph：
@@ -236,6 +262,64 @@ http://127.0.0.1:8080
 
 如果传入的是 Git URL，后端会自动 clone 到临时目录，分析完成后自动清理。如果项目没有 `.codegraph` 索引，后端会自动执行 `codegraph init -i`。
 
+### 方式三：MCP 协议（IDE 集成）
+
+MCP Server 通过 stdio 传输暴露两个工具：
+
+- `analyze_project(project_path, request)`：执行分析，返回 JSON
+- `list_skills()`：返回可用技能列表
+
+#### 用 MCP Inspector 调试
+
+```bash
+mcp dev mcp_server.py
+```
+
+浏览器打开 `http://localhost:3000`，配置 Command 为 `python3`，Arguments 为 `mcp_server.py` 的绝对路径，点 Connect，然后测试工具。
+
+#### 接入 Cursor
+
+在项目根目录创建 `.cursor/mcp.json`：
+
+```json
+{
+  "mcpServers": {
+    "code-analyzer": {
+      "command": "python3",
+      "args": ["/abs/path/to/mcp_server.py"]
+    }
+  }
+}
+```
+
+打开 Cursor，它会自动读取该配置。在 Chat 里输入「用 code-analyzer 分析 Py_test 项目结构」即可。
+
+#### 接入 VS Code
+
+在项目根目录创建 `.vscode/mcp.json`：
+
+```json
+{
+  "servers": {
+    "code-analyzer": {
+      "type": "stdio",
+      "command": "python3",
+      "args": ["/abs/path/to/mcp_server.py"]
+    }
+  }
+}
+```
+
+需要安装 GitHub Copilot 插件。MCP 工具会自动出现在 Copilot Chat 的工具列表中。
+
+#### 接入 Claude Code
+
+```bash
+claude mcp add code-analyzer python3 /abs/path/to/mcp_server.py
+```
+
+之后在对话里说「用 code-analyzer 分析一下这个项目」即可。
+
 ---
 
 ## 现有技能
@@ -287,7 +371,7 @@ print(json.dumps({"status": "success", "data": {...}, "error": None}, ensure_asc
 
 ## 输出格式
 
-所有技能的输出遵循统一协议：
+### 技能输出协议
 
 ```json
 {
@@ -303,25 +387,26 @@ print(json.dumps({"status": "success", "data": {...}, "error": None}, ensure_asc
 - `error`：错误信息（成功时为 `null`）
 - `_meta.tokens`：该技能消耗的 LLM token 数（用于汇总）
 
-编排器汇总输出：
+### 编排器输出结构
 
 ```json
 {
-  "skill": "...",
-  "result": { ... },
-  "_meta": { "skill_tokens": 1234 }
+  "success": true,
+  "steps": { "skill": "...", "result": { ... } },
+  "summary": { "skills_run": [...], "total_tokens": 1234 }
 }
 ```
 
-多技能链式调用时：
+多技能链式调用时，`steps` 变为数组：
 
 ```json
 {
+  "success": true,
   "steps": [
     { "skill": "project-structure", "result": { ... } },
     { "skill": "report-generation", "result": { ... } }
   ],
-  "_meta": { "skill_tokens": 1234 }
+  "summary": { "skills_run": [...], "total_tokens": 1234 }
 }
 ```
 
@@ -332,6 +417,7 @@ print(json.dumps({"status": "success", "data": {...}, "error": None}, ensure_asc
 - Mac / Windows 均兼容
 - 路径处理使用 `os.path`，不做硬编码
 - Web 服务使用 Python 标准库 `http.server`，无额外框架依赖
+- MCP Server 使用官方 `mcp` SDK
 - 前端无框架，原生 HTML + CSS + JS
 
 ---
@@ -346,6 +432,8 @@ print(json.dumps({"status": "success", "data": {...}, "error": None}, ensure_asc
 | 报告保存失败 | 目标目录无写权限 | 在 Web 界面指定一个有写权限的目录 |
 | 浏览器打不开 | 端口被占用 | `PORT=8090 python3 server.py` |
 | Git clone 超时 | 网络问题或仓库太大 | 换用本地路径，或增大 `server.py` 中的 timeout |
+| MCP Inspector 连接失败 | Command / Arguments 填错 | Command 只填 `python3`，路径填到 Arguments 里 |
+| npm 缓存报 EEXIST | npm 缓存损坏 | `npm cache clean --force`，必要时删 `~/.npm/_cacache` |
 
 ---
 
@@ -353,6 +441,7 @@ print(json.dumps({"status": "success", "data": {...}, "error": None}, ensure_asc
 
 - **v0.1**（2026-09-24）：单脚本 Demo，逐文件摘要 + 汇总报告
 - **v0.2**（2026-09-28）：Skill 化改造，接入 CodeGraph，5 个技能，LLM 语义选择，Web 界面
+- **v0.3**（2026-09-29）：MCP Server，IDE 集成，orchestrator 返回结构化 dict，前端技能列表
 
 ---
 
@@ -362,6 +451,7 @@ print(json.dumps({"status": "success", "data": {...}, "error": None}, ensure_asc
 - 输出结构化格式（JSON-LD / OWL），为写入本体做准备
 - 接入多智能体协作，支持并行分析和交叉验证
 - 增加增量分析，代码变更后只更新受影响部分
+- 完善链式调用，支持技能依赖声明和并行执行
 
 ---
 
