@@ -8,42 +8,74 @@
 </head>
 <body>
   <header>
-    <h1>Code Analyzer Agent</h1>
-    <p class="subtitle">遗留系统智能分析 · 代码结构 + 业务规则</p>
+    <div class="header-inner">
+      <h1>Code Analyzer Agent</h1>
+      <p class="subtitle">遗留系统智能分析工具</p>
+    </div>
   </header>
 
   <main>
     <section class="card">
-      <div class="skills-bar">
-        <span class="skills-label">可用技能</span>
-        <div class="skills-list" id="skillList">
-          <span class="skills-loading">加载中…</span>
+      <h2 class="card-title">分析配置</h2>
+
+      <div class="field">
+        <label for="projectPath">项目路径</label>
+        <div class="input-group">
+          <input type="text" id="projectPath" placeholder="点击右侧按钮选择文件夹，或粘贴 Git 仓库 URL">
+          <button type="button" class="btn-secondary" id="chooseFolderBtn">
+            <span class="icon">📁</span> 选择文件夹
+          </button>
         </div>
       </div>
 
       <div class="field">
-        <label for="projectPath">项目路径 / Git 仓库 URL</label>
-        <input type="text" id="projectPath" placeholder="/path/to/project 或 https://github.com/user/repo">
+        <label for="skillSelect">分析类型</label>
+        <select id="skillSelect">
+          <option value="分析项目结构">分析项目结构</option>
+          <option value="提取这个系统的业务规则">抽取业务规则</option>
+          <option value="检测死代码">检测死代码</option>
+          <option value="call-chain">分析调用链</option>
+          <option value="impact-analysis">分析修改影响</option>
+          <option value="重建业务流程">重建业务流程</option>
+          <option value="生成一份项目报告">生成完整项目报告</option>
+        </select>
       </div>
 
-      <div class="field">
-        <label for="request">分析请求</label>
-        <input type="text" id="request" value="提取这个系统的业务规则">
+      <div class="field" id="symbolField" style="display:none;">
+        <label for="symbolInput">目标符号名</label>
+        <input type="text" id="symbolInput" placeholder="例如 create_task">
+        <p class="field-hint">请输入要分析的函数或类名</p>
       </div>
 
-      <div class="field">
-        <label for="reportDir">报告保存位置 <span class="hint">（留空则保存在项目目录下）</span></label>
-        <input type="text" id="reportDir" placeholder="默认：项目目录">
-      </div>
+      <details class="advanced">
+        <summary>高级选项</summary>
+        <div class="field">
+          <label for="reportDir">报告保存位置</label>
+          <div class="input-group">
+            <input type="text" id="reportDir" placeholder="留空则保存在项目目录下">
+            <button type="button" class="btn-secondary" id="chooseReportDirBtn">
+              <span class="icon">📁</span> 选择
+            </button>
+          </div>
+        </div>
+      </details>
 
-      <button id="runBtn">开始分析</button>
+      <button type="button" class="btn-primary" id="runBtn">开始分析</button>
       <div class="status" id="status"></div>
     </section>
 
     <section class="card" id="resultCard" style="display:none;">
       <div class="result-header">
-        <h2>分析结果</h2>
-        <span class="report-path" id="reportPath"></span>
+        <div class="result-title">
+          <h2>分析结果</h2>
+          <span class="skill-badge" id="skillBadge"></span>
+        </div>
+        <div class="result-actions">
+          <button type="button" class="btn-secondary" id="exportBtn">
+            <span class="icon">⬇</span> 导出报告
+          </button>
+          <span class="report-path" id="reportPath"></span>
+        </div>
       </div>
       <div id="resultContent"></div>
     </section>

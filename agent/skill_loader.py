@@ -1,6 +1,6 @@
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List
 
 
@@ -10,6 +10,7 @@ class SkillMeta:
     description: str
     path: str          # 技能目录的绝对路径
     script_path: str   # 入口脚本的绝对路径
+    depends_on: List[str] = field(default_factory=list)
 
 
 class SkillLoader:
@@ -38,7 +39,6 @@ class SkillLoader:
         with open(path, "r", encoding="utf-8") as f:
             content = f.read()
 
-        # 解析 YAML frontmatter
         match = re.match(r"^---\s*\n(.*?)\n---", content, re.DOTALL)
         if not match:
             return None
@@ -46,11 +46,11 @@ class SkillLoader:
         frontmatter = match.group(1)
         name = self._extract_field(frontmatter, "name")
         description = self._extract_field(frontmatter, "description")
+        depends_on = self._extract_list_field(frontmatter, "depends_on")
 
         if not name or not description:
             return None
 
-        # 入口脚本：scripts/ 目录下的第一个 .py 文件
         script_dir = os.path.join(skill_dir, "scripts")
         script_path = ""
         if os.path.isdir(script_dir):
@@ -64,13 +64,39 @@ class SkillLoader:
             description=description,
             path=skill_dir,
             script_path=script_path,
+            depends_on=depends_on,
         )
 
     @staticmethod
     def _extract_field(frontmatter: str, field: str) -> str:
-        # 简单解析 YAML 字段，支持单行和多行
         pattern = rf"^{field}:\s*(.+?)(?=\n\w+:|\Z)"
         match = re.search(pattern, frontmatter, re.MULTILINE | re.DOTALL)
         if match:
             return match.group(1).strip().strip('"').strip("'")
         return ""
+
+    @staticmethod
+    def _extract_list_field(frontmatter: str, field: str) -> List[str]:
+        """解析 YAML 列表字段，支持两种格式：
+        depends_on:
+          - skill-a
+          - skill-b
+        或
+        depends_on: [skill-a, skill-b]
+        """
+        # 行内格式
+        inline = re.search(rf"^{field}:\s*\[(.*?)\]", frontmatter, re.MULTILINE)
+        if inline:
+            return [s.strip().strip('"').strip("'")
+                    for s in inline.group(1).split(",") if s.strip()]
+
+        # 块格式
+        block = re.search(
+            rf"^{field}:\s*\n((?:\s+-\s+.+\n?)+)",
+            frontmatter, re.MULTILINE
+        )
+        if block:
+            items = re.findall(r"-\s+(.+)", block.group(1))
+            return [s.strip().strip('"').strip("'") for s in items if s.strip()]
+
+        return []

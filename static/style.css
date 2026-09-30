@@ -1,185 +1,306 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
+:root {
+  --primary: #4f46e5;
+  --primary-hover: #4338ca;
+  --primary-light: #eef2ff;
+  --bg: #f8fafc;
+  --card: #ffffff;
+  --border: #e2e8f0;
+  --text: #1e293b;
+  --text-muted: #64748b;
+  --text-light: #94a3b8;
+  --success: #059669;
+  --error: #dc2626;
+  --warning: #d97706;
+}
+
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
                "Microsoft YaHei", "Helvetica Neue", sans-serif;
-  background: #f5f7fa;
-  color: #2c3e50;
+  background: var(--bg);
+  color: var(--text);
   min-height: 100vh;
   line-height: 1.6;
+  font-size: 14px;
 }
 
+/* ---- Header ---- */
+
 header {
-  background: #fff;
-  padding: 32px 24px;
-  border-bottom: 1px solid #e4e8ee;
-  text-align: center;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  padding: 28px 24px;
+}
+
+.header-inner {
+  max-width: 960px;
+  margin: 0 auto;
 }
 
 header h1 {
-  font-size: 24px;
-  font-weight: 600;
-  color: #1a2332;
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.01em;
 }
 
 .subtitle {
-  color: #8a95a6;
-  font-size: 14px;
-  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 13px;
+  margin-top: 4px;
 }
 
+/* ---- Layout ---- */
+
 main {
-  max-width: 900px;
-  margin: 32px auto;
-  padding: 0 20px;
+  max-width: 960px;
+  margin: 28px auto;
+  padding: 0 24px 60px;
 }
 
 .card {
-  background: #fff;
+  background: var(--card);
   border-radius: 12px;
   padding: 28px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
-  margin-bottom: 24px;
+  border: 1px solid var(--border);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  margin-bottom: 20px;
 }
 
-/* ---- 技能展示区 ---- */
-
-.skills-bar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 24px;
-  padding-bottom: 18px;
-  border-bottom: 1px solid #eef1f5;
-  flex-wrap: wrap;
+.card-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
 }
 
-.skills-label {
-  font-size: 13px;
-  color: #8a95a6;
-  font-weight: 500;
-  flex-shrink: 0;
+/* ---- Form ---- */
+
+.field {
+  margin-bottom: 20px;
 }
-
-.skills-list {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.skill-tag {
-  display: inline-block;
-  padding: 3px 10px;
-  border-radius: 12px;
-  background: #eef3fb;
-  color: #4a7bbf;
-  font-size: 12px;
-  font-family: "SF Mono", Consolas, monospace;
-  cursor: help;
-}
-
-.skills-loading {
-  font-size: 12px;
-  color: #b0bfd0;
-}
-
-/* ---- 表单 ---- */
-
-.field { margin-bottom: 20px; }
 
 .field label {
   display: block;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
-  margin-bottom: 6px;
-  color: #374151;
+  margin-bottom: 8px;
+  color: var(--text);
 }
 
-.hint {
-  color: #9aa5b1;
-  font-weight: 400;
+.field-hint {
   font-size: 12px;
+  color: var(--text-light);
+  margin-top: 6px;
 }
 
-.field input {
+.input-group {
+  display: flex;
+  gap: 8px;
+}
+
+.input-group input {
+  flex: 1;
+}
+
+.field input[type="text"],
+.field select {
   width: 100%;
   padding: 10px 14px;
-  border: 1px solid #d6dce5;
+  border: 1px solid var(--border);
   border-radius: 8px;
   font-size: 14px;
   font-family: inherit;
+  color: var(--text);
+  background: var(--card);
   transition: border-color 0.15s, box-shadow 0.15s;
-  background: #fafbfc;
 }
 
-.field input:focus {
-  outline: none;
-  border-color: #4a90e2;
-  background: #fff;
-  box-shadow: 0 0 0 3px rgba(74, 144, 226, 0.12);
+.field select {
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 16px;
+  padding-right: 40px;
 }
+
+.field input[type="text"]:focus,
+.field select:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+}
+
+.field input[type="text"]::placeholder {
+  color: var(--text-light);
+}
+
+/* ---- Advanced section ---- */
+
+.advanced {
+  margin-bottom: 20px;
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+}
+
+.advanced summary {
+  font-size: 13px;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+  padding: 4px 0;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.advanced summary::before {
+  content: "▸";
+  display: inline-block;
+  transition: transform 0.15s;
+  font-size: 11px;
+  color: var(--text-light);
+}
+
+.advanced[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.advanced summary::-webkit-details-marker { display: none; }
+
+.advanced .field {
+  margin-top: 16px;
+  margin-bottom: 0;
+}
+
+/* ---- Buttons ---- */
 
 button {
-  background: #4a90e2;
-  color: #fff;
-  border: none;
-  padding: 11px 28px;
-  border-radius: 8px;
-  font-size: 15px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.15s;
   font-family: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s, box-shadow 0.15s, transform 0.05s;
+  padding: 10px 20px;
 }
 
-button:hover:not(:disabled) { background: #3a7bc8; }
-button:disabled { background: #b0bfd0; cursor: not-allowed; }
+.btn-primary {
+  background: var(--primary);
+  color: #fff;
+  width: 100%;
+  padding: 12px 20px;
+  font-size: 15px;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--primary-hover);
+}
+
+.btn-primary:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.btn-primary:disabled {
+  background: #cbd5e1;
+  cursor: not-allowed;
+}
+
+.btn-secondary {
+  background: var(--card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 10px 16px;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: var(--bg);
+  border-color: #cbd5e1;
+}
+
+.btn-secondary .icon {
+  font-size: 14px;
+}
+
+/* ---- Status ---- */
 
 .status {
   margin-top: 16px;
-  font-size: 14px;
-  color: #5a6577;
+  font-size: 13px;
+  color: var(--text-muted);
+  min-height: 20px;
 }
 
-.status.error { color: #d9534f; }
-.status.success { color: #3c9a5f; }
+.status.error { color: var(--error); }
+.status.success { color: var(--success); }
 
-/* ---- 结果区 ---- */
+/* ---- Result card ---- */
 
 .result-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
   margin-bottom: 20px;
-  padding-bottom: 14px;
-  border-bottom: 1px solid #eef1f5;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+  gap: 12px;
   flex-wrap: wrap;
-  gap: 8px;
 }
 
-.result-header h2 {
-  font-size: 18px;
+.result-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.result-title h2 {
+  font-size: 16px;
   font-weight: 600;
+}
+
+.skill-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--primary-light);
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .report-path {
   font-size: 12px;
-  color: #8a95a6;
+  color: var(--text-light);
   font-family: "SF Mono", Consolas, monospace;
   word-break: break-all;
+  max-width: 100%;
 }
+
+/* ---- Rule items (business rules) ---- */
 
 .rule-item {
   padding: 14px 16px;
-  border-left: 3px solid #4a90e2;
+  border-left: 3px solid var(--primary);
   background: #f8fafc;
   border-radius: 6px;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 .rule-item .rule-id {
-  font-size: 12px;
-  color: #4a90e2;
+  font-size: 11px;
+  color: var(--primary);
   font-weight: 600;
   font-family: "SF Mono", Consolas, monospace;
 }
@@ -187,13 +308,13 @@ button:disabled { background: #b0bfd0; cursor: not-allowed; }
 .rule-item .rule-desc {
   margin-top: 4px;
   font-size: 14px;
-  color: #2c3e50;
+  color: var(--text);
 }
 
 .rule-item .rule-meta {
   margin-top: 6px;
   font-size: 12px;
-  color: #9aa5b1;
+  color: var(--text-light);
   font-family: "SF Mono", Consolas, monospace;
 }
 
@@ -201,20 +322,256 @@ button:disabled { background: #b0bfd0; cursor: not-allowed; }
   display: inline-block;
   padding: 1px 8px;
   border-radius: 10px;
-  background: #e8f0fb;
-  color: #4a90e2;
+  background: var(--primary-light);
+  color: var(--primary);
   font-size: 11px;
   margin-right: 8px;
 }
 
-pre {
+/* ---- Table (dead code) ---- */
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.data-table th {
+  text-align: left;
+  padding: 10px 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+  background: #f8fafc;
+}
+
+.data-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #f1f5f9;
+  color: var(--text);
+  vertical-align: top;
+}
+
+.data-table tr:last-child td {
+  border-bottom: none;
+}
+
+.data-table code {
+  font-family: "SF Mono", Consolas, monospace;
+  font-size: 12px;
+  color: var(--primary);
+}
+
+/* ---- Confidence badges ---- */
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.badge-high {
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.badge-medium {
+  background: #fffbeb;
+  color: var(--warning);
+}
+
+.badge-low {
+  background: #f1f5f9;
+  color: var(--text-muted);
+}
+
+.badge-info {
+  background: var(--primary-light);
+  color: var(--primary);
+}
+
+.badge-success {
+  background: #ecfdf5;
+  color: var(--success);
+}
+
+.badge-danger {
+  background: #fef2f2;
+  color: var(--error);
+}
+
+/* ---- Module list ---- */
+
+.module-item {
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 8px;
+  background: var(--card);
+}
+
+.module-name {
+  font-family: "SF Mono", Consolas, monospace;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--primary);
+}
+
+.module-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+/* ---- Call chain tree ---- */
+
+.call-section {
+  margin-bottom: 20px;
+}
+
+.call-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.call-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  margin-bottom: 4px;
+  background: #f8fafc;
+  font-size: 13px;
+}
+
+.call-item code {
+  font-family: "SF Mono", Consolas, monospace;
+  color: var(--primary);
+  font-weight: 500;
+}
+
+.call-item .call-file {
+  font-size: 12px;
+  color: var(--text-light);
+  font-family: "SF Mono", Consolas, monospace;
+}
+
+/* ---- Impact ---- */
+
+.risk-banner {
+  padding: 14px 18px;
+  border-radius: 8px;
+  margin-bottom: 20px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.risk-low { background: #ecfdf5; color: var(--success); }
+.risk-medium { background: #fffbeb; color: var(--warning); }
+.risk-high { background: #fef2f2; color: var(--error); }
+
+/* ---- Markdown report ---- */
+
+.report-body {
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--text);
+}
+
+.report-body h1 {
+  font-size: 20px;
+  font-weight: 700;
+  margin: 24px 0 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.report-body h1:first-child { margin-top: 0; }
+
+.report-body h2 {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 20px 0 10px;
+}
+
+.report-body h3 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 16px 0 8px;
+  color: var(--text-muted);
+}
+
+.report-body p {
+  margin: 10px 0;
+}
+
+.report-body ul, .report-body ol {
+  margin: 10px 0 10px 22px;
+}
+
+.report-body li {
+  margin: 4px 0;
+}
+
+.report-body code {
+  font-family: "SF Mono", Consolas, monospace;
+  font-size: 12px;
+  background: #f1f5f9;
+  padding: 1px 6px;
+  border-radius: 4px;
+  color: var(--primary);
+}
+
+.report-body strong {
+  font-weight: 600;
+}
+
+.report-body hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 20px 0;
+}
+
+/* ---- Empty state ---- */
+
+.empty-state {
+  padding: 24px;
+  text-align: center;
+  color: var(--text-light);
+  font-size: 13px;
+}
+
+/* ---- JSON fallback ---- */
+
+pre.json-view {
   background: #f8fafc;
   padding: 16px;
   border-radius: 8px;
   overflow-x: auto;
   font-size: 12px;
   font-family: "SF Mono", Consolas, monospace;
-  color: #374151;
-  border: 1px solid #eef1f5;
-  max-height: 400px;
+  color: var(--text);
+  border: 1px solid var(--border);
+  max-height: 500px;
+  line-height: 1.5;
+}
+
+.result-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.result-actions .btn-secondary {
+  padding: 6px 14px;
+  font-size: 13px;
 }

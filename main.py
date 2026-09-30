@@ -45,9 +45,9 @@ def main():
     selector_tokens = llm.total_tokens if llm else 0
     skill_tokens = 0
     if isinstance(result, dict):
-        meta = result.get("_meta", {})
-        if isinstance(meta, dict):
-            skill_tokens = meta.get("skill_tokens", 0)
+        summary = result.get("summary", {})
+        if isinstance(summary, dict):
+            skill_tokens = summary.get("total_tokens", 0)
     print(f"Selector tokens: {selector_tokens}")
     print(f"Skill tokens:    {skill_tokens}")
     print(f"Total tokens:    {selector_tokens + skill_tokens}")

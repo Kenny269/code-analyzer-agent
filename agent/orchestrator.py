@@ -59,6 +59,8 @@ class KeywordSelector:
         "call-chain": ["调用", "调用链", "call", "chain"],
         "impact-analysis": ["影响", "风险", "改", "impact", "risk"],
         "business-rule-extraction": ["业务", "规则", "业务逻辑", "business"],
+        "dead-code-detection": ["死代码", "未使用", "冗余", "dead", "unused"],
+        "business-flow-reconstruction": ["流程", "业务流程", "工作流", "flow", "process", "workflow"],
         "report-generation": ["报告", "总结", "report", "summary"],
     }
 
@@ -87,42 +89,58 @@ class Orchestrator:
             self.selector = KeywordSelector()
 
     def load_skills(self) -> List[SkillMeta]:
-        """扫描 skills/ 目录，加载所有技能。"""
         self.skills = self.loader.discover()
         return self.skills
 
     def list_skills(self) -> List[dict]:
-        """返回技能的元数据列表，供外部展示。"""
         if not self.skills:
             self.load_skills()
         return [
-            {"name": s.name, "description": s.description}
+            {"name": s.name, "description": s.description,
+             "depends_on": s.depends_on}
             for s in self.skills
         ]
 
     def select_skills(self, user_request: str) -> List[SkillMeta]:
-        """根据用户请求选择技能。"""
         return self.selector.select(user_request, self.skills)
 
+    def resolve_dependencies(self, selected: List[SkillMeta]) -> List[SkillMeta]:
+        """拓扑排序，展开 depends_on，返回按依赖顺序排列的技能列表。"""
+        result = []
+        visited = set()
+        by_name = {s.name: s for s in self.skills}
+
+        def visit(skill: SkillMeta):
+            if skill.name in visited:
+                return
+            visited.add(skill.name)
+            for dep_name in skill.depends_on:
+                dep = by_name.get(dep_name)
+                if dep:
+                    visit(dep)
+            result.append(skill)
+
+        for s in selected:
+            visit(s)
+        return result
+
     def execute(self, skill: SkillMeta, input_data: dict) -> Any:
-        """执行单个技能。"""
         return self.runner.run(skill, input_data)
 
     def run(self, user_request: str, project_path: str) -> dict:
-        """
-        完整流程：选择技能 → 按顺序执行 → 返回结构化结果。
-        返回的 dict 包含 success、steps、summary 三个字段。
-        """
         if not self.skills:
             self.load_skills()
 
-        skills_to_run = self.select_skills(user_request)
-        if not skills_to_run:
+        selected = self.select_skills(user_request)
+        if not selected:
             return {
                 "success": False,
                 "error": "no matching skill",
                 "available_skills": [s.name for s in self.skills],
             }
+
+        # 展开依赖
+        skills_to_run = self.resolve_dependencies(selected)
 
         previous_results = {}
         steps = []
@@ -146,9 +164,10 @@ class Orchestrator:
 
         output = {
             "success": True,
-            "steps": steps if len(steps) > 1 else steps[0],
+            "steps": steps,
             "summary": {
-                "skills_run": [s.name for s in skills_to_run],
+                "requested_skills": [s.name for s in selected],
+                "executed_skills": [s.name for s in skills_to_run],
                 "total_tokens": skill_tokens,
             },
         }

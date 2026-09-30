@@ -6,6 +6,7 @@ import json
 import subprocess
 import tempfile
 import shutil
+import platform
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 from datetime import datetime
@@ -34,6 +35,8 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_file(os.path.join(STATIC_DIR, "app.js"), "application/javascript")
         elif parsed.path == "/api/skills":
             self._handle_skills()
+        elif parsed.path == "/api/choose-folder":
+            self._handle_choose_folder()
         elif parsed.path == "/api/report":
             self._serve_report(parsed)
         else:
@@ -76,6 +79,60 @@ class Handler(BaseHTTPRequestHandler):
             orch = Orchestrator(SKILLS_ROOT, llm=None)
             orch.load_skills()
             self._send_json(200, {"skills": orch.list_skills()})
+        except Exception as e:
+            self._send_json(500, {"error": str(e)})
+
+    # ---- 文件夹选择对话框 ----
+
+    def _handle_choose_folder(self):
+        """调用系统原生文件夹选择对话框，返回选中的路径。"""
+        system = platform.system()
+        try:
+            if system == "Darwin":
+                # macOS：使用 osascript 调用 Finder 选择框
+                result = subprocess.run(
+                    ["osascript", "-e",
+                     'POSIX path of (choose folder with prompt "选择项目文件夹")'],
+                    capture_output=True, text=True, timeout=300
+                )
+                # 用户取消时 returncode 非 0，stdout 为空
+                path = result.stdout.strip().rstrip("/") if result.returncode == 0 else ""
+
+            elif system == "Windows":
+                # Windows：使用 PowerShell 调用 FolderBrowserDialog
+                ps_script = (
+                    "Add-Type -AssemblyName System.Windows.Forms; "
+                    "$f = New-Object System.Windows.Forms.FolderBrowserDialog; "
+                    "$f.Description = '选择项目文件夹'; "
+                    "if ($f.ShowDialog() -eq 'OK') { Write-Output $f.SelectedPath }"
+                )
+                result = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command", ps_script],
+                    capture_output=True, text=True, timeout=300
+                )
+                path = result.stdout.strip()
+
+            else:
+                # Linux：尝试 zenity
+                result = subprocess.run(
+                    ["zenity", "--file-selection", "--directory",
+                     "--title=选择项目文件夹"],
+                    capture_output=True, text=True, timeout=300
+                )
+                path = result.stdout.strip() if result.returncode == 0 else ""
+
+            if path:
+                self._send_json(200, {"path": path})
+            else:
+                # 用户取消或没选中
+                self._send_json(200, {"path": "", "cancelled": True})
+
+        except subprocess.TimeoutExpired:
+            self._send_json(408, {"error": "folder selection timed out"})
+        except FileNotFoundError:
+            self._send_json(500, {
+                "error": f"system dialog command not available on {system}"
+            })
         except Exception as e:
             self._send_json(500, {"error": str(e)})
 
