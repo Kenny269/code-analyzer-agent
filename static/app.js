@@ -10,15 +10,24 @@ const symbolField = document.getElementById('symbolField');
 const symbolInput = document.getElementById('symbolInput');
 const reportDirInput = document.getElementById('reportDir');
 const exportBtn = document.getElementById('exportBtn');
+const progressContainer = document.getElementById('progressContainer');
+const progressSteps = document.getElementById('progressSteps');
+const historyList = document.getElementById('historyList');
+const clearHistoryBtn = document.getElementById('clearHistoryBtn');
 
 let currentResult = null;
 let currentProjectPath = '';
+let currentEventSource = null;
+
+const HISTORY_KEY = 'code_analyzer_history';
+const MAX_HISTORY = 10;
 
 const SKILL_CONFIG = {
   "分析项目结构": { needsSymbol: false },
   "提取这个系统的业务规则": { needsSymbol: false },
-  "检测死代码": { needsSymbol: false },
   "重建业务流程": { needsSymbol: false },
+  "检测死代码": { needsSymbol: false },
+  "检测循环依赖": { needsSymbol: false },
   "call-chain": {
     needsSymbol: true,
     template: "分析 {symbol} 的调用链",
@@ -32,17 +41,31 @@ const SKILL_CONFIG = {
   "生成一份项目报告": { needsSymbol: false },
 };
 
-// ---- 事件绑定 ----
+// 技能名 → 中文标签
+const SKILL_LABELS = {
+  "project-structure": "项目结构分析",
+  "call-chain": "调用链分析",
+  "impact-analysis": "影响分析",
+  "business-rule-extraction": "业务规则抽取",
+  "business-flow-reconstruction": "业务流程重建",
+  "dead-code-detection": "死代码检测",
+  "dependency-cycle-detection": "循环依赖检测",
+  "report-generation": "报告生成",
+};
+
+// ---- 初始化 ----
 
 runBtn.addEventListener('click', runAnalysis);
 exportBtn.addEventListener('click', exportReport);
 document.getElementById('chooseFolderBtn').addEventListener('click', () => chooseFolder(projectPathInput));
 document.getElementById('chooseReportDirBtn').addEventListener('click', () => chooseFolder(reportDirInput));
 skillSelect.addEventListener('change', onSkillChange);
+clearHistoryBtn.addEventListener('click', clearHistory);
 
 onSkillChange();
+renderHistory();
 
-// ---- 交互逻辑 ----
+// ---- 交互 ----
 
 function onSkillChange() {
   const value = skillSelect.value;
@@ -84,7 +107,57 @@ function buildRequest() {
   return { request: value };
 }
 
-async function runAnalysis() {
+// ---- 进度显示 ----
+
+function resetProgress() {
+  progressSteps.innerHTML = '';
+  progressContainer.style.display = 'block';
+}
+
+function hideProgress() {
+  setTimeout(() => {
+    progressContainer.style.display = 'none';
+  }, 1200);
+}
+
+function addOrUpdateStep(key, label, state) {
+  let el = progressSteps.querySelector(`[data-key="${key}"]`);
+  if (!el) {
+    el = document.createElement('div');
+    el.className = 'progress-step';
+    el.dataset.key = key;
+    el.innerHTML = `<span class="step-indicator"></span><span class="step-label"></span>`;
+    progressSteps.appendChild(el);
+  }
+  el.querySelector('.step-label').textContent = label;
+  el.classList.remove('running', 'done', 'error');
+  if (state) el.classList.add(state);
+}
+
+function updateProgress(event, data) {
+  if (event === 'selecting') {
+    addOrUpdateStep('selecting', '正在选择分析技能...', 'running');
+  } else if (event === 'resolved') {
+    addOrUpdateStep('selecting', '技能选择完成', 'done');
+    const executed = data.executed || [];
+    executed.forEach((skillName, idx) => {
+      addOrUpdateStep('skill-' + skillName,
+        `执行 ${SKILL_LABELS[skillName] || skillName}`, '');
+    });
+  } else if (event === 'skill_start') {
+    const label = SKILL_LABELS[data.skill] || data.skill;
+    addOrUpdateStep('skill-' + data.skill, `正在执行 ${label}...`, 'running');
+  } else if (event === 'skill_done') {
+    const label = SKILL_LABELS[data.skill] || data.skill;
+    const state = data.status === 'success' ? 'done' : 'error';
+    addOrUpdateStep('skill-' + data.skill,
+      `${label} ${state === 'done' ? '完成' : '失败'}`, state);
+  }
+}
+
+// ---- 分析 ----
+
+function runAnalysis() {
   const projectPath = projectPathInput.value.trim();
   const reportDir = reportDirInput.value.trim();
 
@@ -99,38 +172,83 @@ async function runAnalysis() {
     return;
   }
 
+  if (currentEventSource) {
+    currentEventSource.close();
+    currentEventSource = null;
+  }
+
   runBtn.disabled = true;
   resultCard.style.display = 'none';
-  setStatus('正在分析中，请稍候……这可能需要几分钟。', '');
+  setStatus('正在分析中...', '');
+  resetProgress();
 
-  try {
-    const resp = await fetch('/api/analyze', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        project_path: projectPath,
-        request: request,
-        report_dir: reportDir
-      })
-    });
+  const params = new URLSearchParams({
+    project_path: projectPath,
+    request: request,
+    report_dir: reportDir,
+  });
 
-    const data = await resp.json();
-    if (!resp.ok) {
-      setStatus('分析失败：' + (data.error || '未知错误'), 'error');
-      return;
+  const es = new EventSource('/api/analyze-stream?' + params.toString());
+  currentEventSource = es;
+
+  es.addEventListener('progress', (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      const stage = data.stage;
+      if (['selecting', 'resolved', 'skill_start', 'skill_done'].includes(stage)) {
+        updateProgress(stage, data);
+      } else if (stage === 'clone') {
+        addOrUpdateStep('clone', data.message || '正在克隆仓库...', 'running');
+      } else if (stage === 'index') {
+        addOrUpdateStep('index', data.message || '正在构建索引...', 'running');
+      }
+    } catch (err) {
+      // ignore
     }
+  });
 
-    currentResult = data.result;
-    currentProjectPath = projectPath;
+  es.addEventListener('complete', (e) => {
+    es.close();
+    currentEventSource = null;
+    try {
+      const data = JSON.parse(e.data);
+      currentResult = data.result;
+      currentProjectPath = projectPath;
 
-    setStatus('分析完成。', 'success');
-    renderResult(data.result, data.report_path);
-    resultCard.style.display = 'block';
-  } catch (e) {
-    setStatus('请求失败：' + e.message, 'error');
-  } finally {
+      setStatus('分析完成。', 'success');
+      renderResult(data.result, data.report_path);
+      resultCard.style.display = 'block';
+      saveHistory(request, projectPath, data.result, data.report_path);
+    } catch (err) {
+      setStatus('解析结果失败：' + err.message, 'error');
+    } finally {
+      runBtn.disabled = false;
+      hideProgress();
+    }
+  });
+
+  es.addEventListener('error', (e) => {
+    es.close();
+    currentEventSource = null;
     runBtn.disabled = false;
-  }
+    try {
+      const data = e.data ? JSON.parse(e.data) : {};
+      setStatus('分析失败：' + (data.error || '未知错误'), 'error');
+    } catch (err) {
+      setStatus('分析失败', 'error');
+    }
+    hideProgress();
+  });
+
+  // EventSource 网络错误
+  es.onerror = () => {
+    if (es.readyState === EventSource.CLOSED) return;
+    es.close();
+    currentEventSource = null;
+    runBtn.disabled = false;
+    setStatus('连接中断，请重试', 'error');
+    hideProgress();
+  };
 }
 
 function setStatus(msg, type) {
@@ -150,7 +268,7 @@ function renderResult(result, reportPath) {
   }
 
   const skills = result.steps.map(s => s.skill);
-  skillBadge.textContent = skills.join(' → ');
+  skillBadge.textContent = skills.map(s => SKILL_LABELS[s] || s).join(' → ');
 
   for (const step of result.steps) {
     const skillName = step.skill;
@@ -173,14 +291,13 @@ function renderJSON(data) {
   resultContent.appendChild(pre);
 }
 
-// ---- 各技能渲染器 ----
-
 const RENDERERS = {
   "project-structure": renderProjectStructure,
   "call-chain": renderCallChain,
   "impact-analysis": renderImpactAnalysis,
   "business-rule-extraction": renderBusinessRules,
   "dead-code-detection": renderDeadCode,
+  "dependency-cycle-detection": renderDependencyCycles,
   "business-flow-reconstruction": renderBusinessFlows,
   "report-generation": renderReport,
 };
@@ -242,59 +359,6 @@ function renderCallChain(data) {
 
   appendCallSection('调用者', data.callers);
   appendCallSection('被调用者', data.callees);
-}
-
-function renderBusinessFlows(data) {
-  const disclaimer = document.createElement('div');
-  disclaimer.style.cssText = 'padding:10px 14px;background:#fffbeb;color:#92400e;border-radius:6px;font-size:12px;margin-bottom:16px;';
-  disclaimer.textContent = data.disclaimer || '以下为推断的业务流程，需人工核对。';
-  resultContent.appendChild(disclaimer);
-
-  const flows = data.flows || [];
-  if (flows.length === 0) {
-    resultContent.appendChild(emptyState('未识别出业务流程'));
-    return;
-  }
-
-  flows.forEach((flow, idx) => {
-    const card = document.createElement('div');
-    card.style.cssText = 'border:1px solid #e2e8f0;border-radius:8px;padding:18px;margin-bottom:14px;';
-
-    const title = document.createElement('div');
-    title.style.cssText = 'font-size:15px;font-weight:600;color:#4f46e5;margin-bottom:6px;';
-    title.textContent = `${idx + 1}. ${flow.name || '未命名流程'}`;
-    card.appendChild(title);
-
-    if (flow.entry_point) {
-      const ep = document.createElement('div');
-      ep.style.cssText = 'font-size:12px;color:#94a3b8;font-family:"SF Mono",Consolas,monospace;margin-bottom:10px;';
-      ep.textContent = `入口：${flow.entry_point.symbol || ''} (${flow.entry_point.file || ''}:${flow.entry_point.line || ''})`;
-      card.appendChild(ep);
-    }
-
-    const steps = flow.steps || [];
-    if (steps.length > 0) {
-      const ol = document.createElement('ol');
-      ol.style.cssText = 'margin:10px 0 10px 22px;font-size:13px;';
-      steps.forEach(step => {
-        const li = document.createElement('li');
-        li.style.marginBottom = '6px';
-        li.innerHTML = `<strong>${escapeHtml(step.name || '')}</strong> — ${escapeHtml(step.description || '')}` +
-          (step.file ? `<br><span style="font-size:11px;color:#94a3b8;font-family:'SF Mono',Consolas,monospace;">${escapeHtml(step.file)}:${step.line || ''}</span>` : '');
-        ol.appendChild(li);
-      });
-      card.appendChild(ol);
-    }
-
-    if (flow.business_summary) {
-      const sum = document.createElement('div');
-      sum.style.cssText = 'margin-top:10px;padding:10px 12px;background:#f8fafc;border-radius:6px;font-size:13px;color:#475569;';
-      sum.textContent = flow.business_summary;
-      card.appendChild(sum);
-    }
-
-    resultContent.appendChild(card);
-  });
 }
 
 function appendCallSection(title, list) {
@@ -437,13 +501,7 @@ function renderDeadCode(data) {
   table.className = 'data-table';
   table.innerHTML = `
     <thead>
-      <tr>
-        <th>符号</th>
-        <th>类型</th>
-        <th>位置</th>
-        <th>置信度</th>
-        <th>复核建议</th>
-      </tr>
+      <tr><th>符号</th><th>类型</th><th>位置</th><th>置信度</th><th>复核建议</th></tr>
     </thead>
   `;
   const tbody = document.createElement('tbody');
@@ -463,6 +521,99 @@ function renderDeadCode(data) {
   resultContent.appendChild(table);
 }
 
+function renderDependencyCycles(data) {
+  const summary = document.createElement('div');
+  summary.style.marginBottom = '16px';
+  summary.innerHTML = `
+    <span class="badge badge-info">扫描文件 ${data.total_files_scanned || 0}</span>
+    <span class="badge badge-info" style="margin-left:6px;">依赖边 ${data.total_edges || 0}</span>
+    <span class="badge ${data.total_cycles > 0 ? 'badge-high' : 'badge-success'}" style="margin-left:6px;">循环 ${data.total_cycles || 0}</span>
+  `;
+  resultContent.appendChild(summary);
+
+  const cycles = data.cycles || [];
+  if (cycles.length === 0) {
+    resultContent.appendChild(emptyState('未发现循环依赖'));
+    return;
+  }
+
+  cycles.forEach((cycle, idx) => {
+    const card = document.createElement('div');
+    card.style.cssText = 'border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin-bottom:12px;';
+
+    const header = document.createElement('div');
+    header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;';
+    header.innerHTML = `
+      <strong style="color:#1e293b;">循环 ${idx + 1} · ${cycle.size} 个文件</strong>
+      <span class="badge badge-${cycle.severity || 'low'}">${cycle.severity || 'low'}</span>
+    `;
+    card.appendChild(header);
+
+    const list = document.createElement('ul');
+    list.style.cssText = 'margin:8px 0 0 22px;font-size:13px;font-family:"SF Mono",Consolas,monospace;color:#4f46e5;';
+    for (const f of (cycle.files || [])) {
+      const li = document.createElement('li');
+      li.textContent = f;
+      list.appendChild(li);
+    }
+    card.appendChild(list);
+    resultContent.appendChild(card);
+  });
+}
+
+function renderBusinessFlows(data) {
+  const disclaimer = document.createElement('div');
+  disclaimer.style.cssText = 'padding:10px 14px;background:#fffbeb;color:#92400e;border-radius:6px;font-size:12px;margin-bottom:16px;';
+  disclaimer.textContent = data.disclaimer || '以下为推断的业务流程，需人工核对。';
+  resultContent.appendChild(disclaimer);
+
+  const flows = data.flows || [];
+  if (flows.length === 0) {
+    resultContent.appendChild(emptyState('未识别出业务流程'));
+    return;
+  }
+
+  flows.forEach((flow, idx) => {
+    const card = document.createElement('div');
+    card.style.cssText = 'border:1px solid #e2e8f0;border-radius:8px;padding:18px;margin-bottom:14px;';
+
+    const title = document.createElement('div');
+    title.style.cssText = 'font-size:15px;font-weight:600;color:#4f46e5;margin-bottom:6px;';
+    title.textContent = `${idx + 1}. ${flow.name || '未命名流程'}`;
+    card.appendChild(title);
+
+    if (flow.entry_point) {
+      const ep = document.createElement('div');
+      ep.style.cssText = 'font-size:12px;color:#94a3b8;font-family:"SF Mono",Consolas,monospace;margin-bottom:10px;';
+      ep.textContent = `入口：${flow.entry_point.symbol || ''} (${flow.entry_point.file || ''}:${flow.entry_point.line || ''})`;
+      card.appendChild(ep);
+    }
+
+    const steps = flow.steps || [];
+    if (steps.length > 0) {
+      const ol = document.createElement('ol');
+      ol.style.cssText = 'margin:10px 0 10px 22px;font-size:13px;';
+      steps.forEach(step => {
+        const li = document.createElement('li');
+        li.style.marginBottom = '6px';
+        li.innerHTML = `<strong>${escapeHtml(step.name || '')}</strong> — ${escapeHtml(step.description || '')}` +
+          (step.file ? `<br><span style="font-size:11px;color:#94a3b8;font-family:'SF Mono',Consolas,monospace;">${escapeHtml(step.file)}:${step.line || ''}</span>` : '');
+        ol.appendChild(li);
+      });
+      card.appendChild(ol);
+    }
+
+    if (flow.business_summary) {
+      const sum = document.createElement('div');
+      sum.style.cssText = 'margin-top:10px;padding:10px 12px;background:#f8fafc;border-radius:6px;font-size:13px;color:#475569;';
+      sum.textContent = flow.business_summary;
+      card.appendChild(sum);
+    }
+
+    resultContent.appendChild(card);
+  });
+}
+
 function renderReport(data) {
   const markdown = data.report_markdown || '';
   if (!markdown) {
@@ -473,6 +624,115 @@ function renderReport(data) {
   body.className = 'report-body';
   body.innerHTML = markdownToHtml(markdown);
   resultContent.appendChild(body);
+}
+
+// ---- 历史记录 ----
+
+function saveHistory(request, projectPath, result, reportPath) {
+  let history = loadHistory();
+  const skills = (result.steps || []).map(s => s.skill);
+  const entry = {
+    id: Date.now(),
+    time: new Date().toLocaleString('zh-CN'),
+    project: projectPath,
+    request: request,
+    skills: skills,
+    result: result,
+    reportPath: reportPath,
+  };
+  history.unshift(entry);
+  if (history.length > MAX_HISTORY) {
+    history = history.slice(0, MAX_HISTORY);
+  }
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+  } catch (e) {
+    // localStorage 满了，丢弃最早的
+    history = history.slice(0, 3);
+    try { localStorage.setItem(HISTORY_KEY, JSON.stringify(history)); } catch (_) {}
+  }
+  renderHistory();
+}
+
+function loadHistory() {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    if (!raw) return [];
+    return JSON.parse(raw);
+  } catch (e) {
+    return [];
+  }
+}
+
+function clearHistory() {
+  if (!confirm('确认清空所有历史记录？')) return;
+  localStorage.removeItem(HISTORY_KEY);
+  renderHistory();
+}
+
+function renderHistory() {
+  const history = loadHistory();
+  historyList.innerHTML = '';
+
+  if (history.length === 0) {
+    historyList.innerHTML = '<div class="empty-state">暂无历史记录</div>';
+    clearHistoryBtn.style.display = 'none';
+    return;
+  }
+
+  clearHistoryBtn.style.display = 'inline-block';
+
+  history.forEach(entry => {
+    const item = document.createElement('div');
+    item.className = 'history-item';
+
+    const main = document.createElement('div');
+    main.className = 'history-item-main';
+
+    const title = document.createElement('div');
+    title.className = 'history-item-title';
+    title.textContent = entry.request;
+
+    const meta = document.createElement('div');
+    meta.className = 'history-item-meta';
+    const skillLabels = (entry.skills || []).map(s => SKILL_LABELS[s] || s).join(' · ');
+    meta.textContent = `${entry.time} · ${skillLabels}`;
+
+    main.appendChild(title);
+    main.appendChild(meta);
+
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'history-item-remove';
+    removeBtn.textContent = '×';
+    removeBtn.title = '删除';
+    removeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      removeHistory(entry.id);
+    });
+
+    item.appendChild(main);
+    item.appendChild(removeBtn);
+
+    item.addEventListener('click', () => loadHistoryEntry(entry));
+    historyList.appendChild(item);
+  });
+}
+
+function removeHistory(id) {
+  let history = loadHistory();
+  history = history.filter(h => h.id !== id);
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+  renderHistory();
+}
+
+function loadHistoryEntry(entry) {
+  currentResult = entry.result;
+  currentProjectPath = entry.project;
+  projectPathInput.value = entry.project;
+  setStatus(`已加载历史记录（${entry.time}）`, 'success');
+  renderResult(entry.result, entry.reportPath);
+  resultCard.style.display = 'block';
+  resultCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 // ---- 导出报告 ----
@@ -597,6 +857,24 @@ const SKILL_TO_MARKDOWN = {
     return out.join('\n');
   },
 
+  "dependency-cycle-detection": (data) => {
+    const out = ['## 循环依赖', ''];
+    out.push(`- 扫描文件：${data.total_files_scanned || 0}`);
+    out.push(`- 依赖边：${data.total_edges || 0}`);
+    out.push(`- 循环数量：${data.total_cycles || 0}`);
+    out.push('');
+    for (let i = 0; i < (data.cycles || []).length; i++) {
+      const c = data.cycles[i];
+      out.push(`### 循环 ${i + 1} · 严重程度 ${c.severity || ''}`);
+      out.push('');
+      for (const f of (c.files || [])) {
+        out.push(`- \`${f}\``);
+      }
+      out.push('');
+    }
+    return out.join('\n');
+  },
+
   "call-chain": (data) => {
     const out = ['## 调用链分析', ''];
     out.push(`**目标**：\`${data.target || '—'}\``);
@@ -642,10 +920,6 @@ const SKILL_TO_MARKDOWN = {
     return out.join('\n');
   },
 
-  "report-generation": (data) => {
-    return data.report_markdown || '';
-  },
-
   "business-flow-reconstruction": (data) => {
     const out = ['## 业务流程', ''];
     if (data.disclaimer) {
@@ -670,6 +944,10 @@ const SKILL_TO_MARKDOWN = {
       }
     }
     return out.join('\n');
+  },
+
+  "report-generation": (data) => {
+    return data.report_markdown || '';
   },
 };
 

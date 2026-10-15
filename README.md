@@ -16,6 +16,7 @@
 - **业务规则抽取**：从代码中提取业务人员能看懂的自然语言规则
 - **业务流程重建**：从代码还原端到端的业务流程
 - **死代码检测**：识别疑似未使用的函数和类（辅助人工复核）
+- **循环依赖检测**：发现模块间的循环依赖，识别重构阻塞点
 - **报告生成**：把分析结果转成可读的中文报告
 
 所有分析结果以结构化 JSON 输出，可直接保存、导出为 Markdown，或接入后续流程。
@@ -36,34 +37,36 @@
 ┌─────────────────────────────────────────────────────────────┐
 │  编排层                                                      │
 │  orchestrator.py                                            │
-│  - 加载所有技能                                               │
-│  - 根据用户请求选择技能（LLM 语义匹配 / 关键词回退）              │
-│  - 展开技能依赖（depends_on），做拓扑排序                       │
-│  - 按顺序执行技能，串联上下文                                   │
-│  - 汇总 token 消耗                                           │
-│  - 返回结构化 dict                                           │
+│  - 加载所有技能                                              │
+│  - 根据用户请求选择技能（LLM 语义匹配 / 关键词回退）           │
+│  - 展开技能依赖（depends_on），做拓扑排序                     │
+│  - 按顺序执行技能，串联上下文                                 │
+│  - 通过 progress_callback 上报进度                           │
+│  - 汇总 token 消耗                                          │
+│  - 返回结构化 dict                                          │
 └─────────────────────────┬───────────────────────────────────┘
                           │
                           ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  技能执行层                                                  │
-│  skill_loader.py  │  skill_runner.py                       │
-│  - 扫描 skills/ 目录                                         │
-│  - 解析 SKILL.md 元数据（含 depends_on）                      │
-│  - 以子进程执行技能脚本                                       │
+│  skill_loader.py  │  skill_runner.py                        │
+│  - 扫描 skills/ 目录                                        │
+│  - 解析 SKILL.md 元数据（含 depends_on）                     │
+│  - 以子进程执行技能脚本                                      │
 │  - 通过 stdin/stdout JSON 通信                              │
 └─────────────────────────┬───────────────────────────────────┘
                           │
                           ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  技能层 skills/                                              │
-│  每个技能是独立目录，包含 SKILL.md + scripts/                   │
+│  每个技能是独立目录，包含 SKILL.md + scripts/                 │
 │  - project-structure                                        │
 │  - call-chain                                               │
 │  - impact-analysis                                          │
 │  - business-rule-extraction                                 │
 │  - business-flow-reconstruction                             │
 │  - dead-code-detection                                      │
+│  - dependency-cycle-detection                               │
 │  - report-generation                                        │
 └─────────────────────────┬───────────────────────────────────┘
                           │
@@ -71,8 +74,8 @@
 ┌─────────────────────────────────────────────────────────────┐
 │  共享工具层                                                  │
 │  codegraph_client.py  │  llm_client.py                      │
-│  - CodeGraph CLI 封装（代码图查询）                           │
-│  - LLM 调用封装（DeepSeek / OpenAI 兼容）                     │
+│  - CodeGraph CLI 封装（代码图查询）                          │
+│  - LLM 调用封装（DeepSeek / OpenAI 兼容）                    │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -81,14 +84,16 @@
 **入口层**负责接收用户输入，不做业务逻辑，只是把 `project_path` + `user_request` 传给编排器。
 
 - `main.py`：解析命令行参数
-- `server.py`：解析 HTTP 请求，提供 Web 界面和 REST API
+- `server.py`：解析 HTTP 请求，提供 Web 界面、SSE 进度流、REST API
 - `mcp_server.py`：实现 MCP 协议，把能力暴露为 MCP 工具，供 AI IDE 调用
 
-三个入口共用同一个 `Orchestrator` 实例。
+三个入口共用同一个 `Orchestrator`。
 
 **编排层**是系统的核心调度中心。它启动时通过 `skill_loader` 扫描 `skills/` 目录，把所有技能的元数据（`name` + `description` + `depends_on`）读入内存。用户请求到来时，通过 LLM 语义匹配选出最相关的技能（一个或多个）。如果 LLM 不可用，则回退到关键词匹配。之后，编排器会展开技能的依赖，做拓扑排序，确保依赖先执行。
 
-`orchestrator.run()` 返回结构化的 dict：
+`orchestrator.run()` 支持可选的 `progress_callback` 参数，在执行每个阶段时回调，用于向调用方（如 Web 的 SSE 流）上报进度。
+
+返回结构化的 dict：
 
 ```python
 {
@@ -114,13 +119,14 @@
 用户请求 + 项目路径
    │
    ▼
-Orchestrator.run()
+Orchestrator.run(progress_callback)
    │
    ├─→ Selector.select()         选择技能
    ├─→ resolve_dependencies()    展开依赖，拓扑排序
    │
    ├─→ 对每个技能（含依赖）：
    │     │
+   │     ├─→ progress_callback("skill_start", {skill})
    │     ├─→ SkillRunner.run()  启动子进程
    │     │     │
    │     │     ├─→ 技能脚本读取 stdin JSON
@@ -129,9 +135,10 @@ Orchestrator.run()
    │     │     ├─→ 调用 LLM（如需要）
    │     │     └─→ 输出 stdout JSON
    │     │
+   │     ├─→ progress_callback("skill_done", {skill, status})
    │     └─→ 收集结果，传给下一个技能
    │
-   └─→ 返回汇总结果 + token 统计
+   └─→ progress_callback("complete", {summary})
 ```
 
 ---
@@ -141,7 +148,7 @@ Orchestrator.run()
 ```
 code_analyzing_agent/
 ├── main.py                          # CLI 入口
-├── server.py                        # Web 入口
+├── server.py                        # Web 入口（含 SSE 进度流）
 ├── mcp_server.py                    # MCP 入口（IDE 集成）
 ├── .env                             # 配置（不提交）
 ├── .env.example                     # 配置模板
@@ -150,7 +157,7 @@ code_analyzing_agent/
 ├── Plan.md                          # 项目规划文档
 ├── agent/
 │   ├── __init__.py
-│   ├── orchestrator.py              # 编排器 + 技能选择 + 依赖解析
+│   ├── orchestrator.py              # 编排器 + 技能选择 + 依赖解析 + 进度回调
 │   ├── skill_loader.py              # 技能发现与元数据解析
 │   ├── skill_runner.py              # 技能执行引擎
 │   ├── codegraph_client.py          # CodeGraph CLI 封装
@@ -172,6 +179,9 @@ code_analyzing_agent/
 │   │   ├── SKILL.md
 │   │   └── scripts/analyze.py
 │   ├── dead-code-detection/
+│   │   ├── SKILL.md
+│   │   └── scripts/analyze.py
+│   ├── dependency-cycle-detection/
 │   │   ├── SKILL.md
 │   │   └── scripts/analyze.py
 │   └── report-generation/
@@ -250,6 +260,9 @@ python3 main.py /path/to/project "重建业务流程"
 # 死代码检测
 python3 main.py /path/to/project "检测死代码"
 
+# 循环依赖检测
+python3 main.py /path/to/project "检测循环依赖"
+
 # 调用链分析
 python3 main.py /path/to/project "分析 create_task 的调用链"
 
@@ -281,7 +294,9 @@ http://127.0.0.1:8080
 - **分析类型**：下拉选择，无需手动输入文字
 - **目标符号名**：选择「分析调用链」或「分析修改影响」时自动出现
 - **高级选项**：可折叠，用于自定义报告保存位置
+- **实时进度**：分析过程中，页面显示进度步骤，每个技能依次点亮。当前运行的技能显示"正在执行"，完成的显示"完成 ✓"
 - **导出报告**：分析完成后，结果卡片右上角出现「导出报告」按钮，一键下载 Markdown 文件
+- **分析历史**：页面底部维护最近 10 次分析记录，点击任意一条即可重新加载结果，无需重跑
 
 分析结果按技能类型分别可视化：
 
@@ -291,11 +306,14 @@ http://127.0.0.1:8080
 | 业务规则 | 蓝色边线卡片，显示规则描述、分类、代码位置 |
 | 业务流程 | 流程卡片，含有序步骤列表和业务总结 |
 | 死代码 | 表格 + 置信度徽章 + 复核建议 |
+| 循环依赖 | 循环卡片列表，标注严重程度和涉及文件 |
 | 调用链 | 调用者 / 被调用者分组列表 |
 | 影响分析 | 彩色风险横幅 + 受影响符号表格 |
 | 报告生成 | Markdown 渲染为 HTML |
 
 如果传入的是 Git URL，后端会自动 clone 到临时目录，分析完成后自动清理。如果项目没有 `.codegraph` 索引，后端会自动执行 `codegraph init -i`。
+
+**关于历史记录**：历史记录存在浏览器 localStorage 里，不会上传到服务器，也不占用服务器空间。每个浏览器的历史相互独立。清空历史会删除所有本机记录。
 
 ### 方式三：MCP 协议（IDE 集成）
 
@@ -367,6 +385,7 @@ claude mcp add code-analyzer python3 /abs/path/to/mcp_server.py
 | `business-rule-extraction` | 从代码中抽取业务规则（自然语言） | CodeGraph + LLM |
 | `business-flow-reconstruction` | 从代码重建端到端业务流程 | project-structure + business-rule-extraction |
 | `dead-code-detection` | 检测疑似死代码（需人工复核） | CodeGraph |
+| `dependency-cycle-detection` | 检测模块间的循环依赖 | 无（纯文件扫描 + Tarjan 算法） |
 | `report-generation` | 把分析结果转成可读报告 | LLM |
 
 ### 技能依赖
@@ -479,6 +498,21 @@ print(json.dumps({
 
 `steps` 始终是数组，即使只执行了一个技能。
 
+### 进度事件
+
+当使用 SSE 端点 `/api/analyze-stream` 时，服务端会推送以下事件：
+
+| 事件 | 数据 | 说明 |
+|------|------|------|
+| `progress` | `{stage: "clone", message}` | 正在克隆 Git 仓库 |
+| `progress` | `{stage: "index", message}` | 正在构建 CodeGraph 索引 |
+| `progress` | `{stage: "selecting", message}` | 正在选择技能 |
+| `progress` | `{stage: "resolved", requested, executed}` | 技能依赖已解析 |
+| `progress` | `{stage: "skill_start", skill}` | 某个技能开始执行 |
+| `progress` | `{stage: "skill_done", skill, status}` | 某个技能执行完成 |
+| `complete` | `{result, report_path}` | 整体分析完成 |
+| `error` | `{error}` | 发生错误 |
+
 ---
 
 ## 兼容性
@@ -486,9 +520,10 @@ print(json.dumps({
 - Mac / Windows 均兼容
 - 路径处理使用 `os.path`，不做硬编码
 - 文件夹选择对话框：macOS 用 `osascript`，Windows 用 PowerShell，Linux 用 `zenity`
-- Web 服务使用 Python 标准库 `http.server`，无额外框架依赖
+- Web 服务使用 Python 标准库 `ThreadingHTTPServer`，支持并发请求，无额外框架依赖
 - MCP Server 使用官方 `mcp` SDK
 - 前端无框架，原生 HTML + CSS + JS
+- 历史记录使用 localStorage，不依赖后端存储
 
 ---
 
@@ -503,6 +538,8 @@ print(json.dumps({
 | 浏览器打不开 | 端口被占用 | `PORT=8090 python3 server.py` |
 | Git clone 超时 | 网络问题或仓库太大 | 换用本地路径，或增大 `server.py` 中的 timeout |
 | 文件夹选择对话框不弹出 | 系统命令不可用 | macOS 需 `osascript`，Windows 需 PowerShell，Linux 需 `zenity` |
+| 分析进度停滞 | 某个技能耗时较长 | 观察终端日志；可能是 LLM 调用慢或大项目索引耗时长 |
+| 分析历史丢失 | 浏览器清除了 localStorage | 历史记录不持久化到磁盘，清除浏览器数据会丢失 |
 | MCP Inspector 连接失败 | Command / Arguments 填错 | Command 只填 `python3`，路径填到 Arguments 里 |
 | npm 缓存报 EEXIST | npm 缓存损坏 | `npm cache clean --force`，必要时删 `~/.npm/_cacache` |
 
@@ -514,6 +551,7 @@ print(json.dumps({
 - **v0.2**（2026-09-28）：Skill 化改造，接入 CodeGraph，5 个技能，LLM 语义选择，Web 界面
 - **v0.3**（2026-09-29）：MCP Server，IDE 集成，orchestrator 返回结构化 dict，前端技能列表
 - **v0.4**（2026-09-30）：业务流程重建技能，死代码检测技能，Skill 依赖机制（depends_on），前端多类型可视化，文件夹选择对话框，下拉选择分析类型，导出 Markdown 报告
+- **v0.5**（2026-10-15）：循环依赖检测技能，SSE 实时进度反馈，分析历史记录（localStorage），ThreadingHTTPServer 并发支持，技能中文标签
 
 ---
 
@@ -521,7 +559,7 @@ print(json.dumps({
 
 - 在真实的 1000+ 文件项目上验证架构
 - 设计本体 schema，把分析结果写入本体，支持增量分析
-- 增加更多技能：数据流分析、技术债务量化、重构方案生成
+- 增加更多技能：数据流分析、技术债务量化、API 清单生成、敏感信息扫描
 - 接入多智能体协作，支持并行分析和交叉验证
 - 完善链式调用，支持技能并行执行
 

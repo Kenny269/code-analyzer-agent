@@ -33,10 +33,11 @@
         <select id="skillSelect">
           <option value="分析项目结构">分析项目结构</option>
           <option value="提取这个系统的业务规则">抽取业务规则</option>
+          <option value="重建业务流程">重建业务流程</option>
           <option value="检测死代码">检测死代码</option>
+          <option value="检测循环依赖">检测循环依赖</option>
           <option value="call-chain">分析调用链</option>
           <option value="impact-analysis">分析修改影响</option>
-          <option value="重建业务流程">重建业务流程</option>
           <option value="生成一份项目报告">生成完整项目报告</option>
         </select>
       </div>
@@ -62,6 +63,10 @@
 
       <button type="button" class="btn-primary" id="runBtn">开始分析</button>
       <div class="status" id="status"></div>
+
+      <div class="progress-container" id="progressContainer" style="display:none;">
+        <div class="progress-steps" id="progressSteps"></div>
+      </div>
     </section>
 
     <section class="card" id="resultCard" style="display:none;">
@@ -78,6 +83,14 @@
         </div>
       </div>
       <div id="resultContent"></div>
+    </section>
+
+    <section class="card" id="historyCard">
+      <h2 class="card-title">分析历史</h2>
+      <div id="historyList">
+        <div class="empty-state">暂无历史记录</div>
+      </div>
+      <button type="button" class="btn-text" id="clearHistoryBtn" style="display:none;">清空历史</button>
     </section>
   </main>
 

@@ -1,9 +1,12 @@
 import os
 import json
-from typing import List, Optional, Any
+from typing import List, Optional, Any, Callable
 from .skill_loader import SkillLoader, SkillMeta
 from .skill_runner import SkillRunner
 from .llm_client import LLMClient
+
+
+ProgressCallback = Optional[Callable[[str, dict], None]]
 
 
 class LLMSelector:
@@ -60,6 +63,7 @@ class KeywordSelector:
         "impact-analysis": ["影响", "风险", "改", "impact", "risk"],
         "business-rule-extraction": ["业务", "规则", "业务逻辑", "business"],
         "dead-code-detection": ["死代码", "未使用", "冗余", "dead", "unused"],
+        "dependency-cycle-detection": ["循环依赖", "循环", "环路", "cycle", "circular"],
         "business-flow-reconstruction": ["流程", "业务流程", "工作流", "flow", "process", "workflow"],
         "report-generation": ["报告", "总结", "report", "summary"],
     }
@@ -105,7 +109,6 @@ class Orchestrator:
         return self.selector.select(user_request, self.skills)
 
     def resolve_dependencies(self, selected: List[SkillMeta]) -> List[SkillMeta]:
-        """拓扑排序，展开 depends_on，返回按依赖顺序排列的技能列表。"""
         result = []
         visited = set()
         by_name = {s.name: s for s in self.skills}
@@ -127,9 +130,13 @@ class Orchestrator:
     def execute(self, skill: SkillMeta, input_data: dict) -> Any:
         return self.runner.run(skill, input_data)
 
-    def run(self, user_request: str, project_path: str) -> dict:
+    def run(self, user_request: str, project_path: str,
+            progress_callback: ProgressCallback = None) -> dict:
         if not self.skills:
             self.load_skills()
+
+        if progress_callback:
+            progress_callback("selecting", {"message": "正在选择技能..."})
 
         selected = self.select_skills(user_request)
         if not selected:
@@ -139,14 +146,22 @@ class Orchestrator:
                 "available_skills": [s.name for s in self.skills],
             }
 
-        # 展开依赖
         skills_to_run = self.resolve_dependencies(selected)
+
+        if progress_callback:
+            progress_callback("resolved", {
+                "requested": [s.name for s in selected],
+                "executed": [s.name for s in skills_to_run],
+            })
 
         previous_results = {}
         steps = []
         skill_tokens = 0
 
         for skill in skills_to_run:
+            if progress_callback:
+                progress_callback("skill_start", {"skill": skill.name})
+
             input_data = {
                 "project_path": os.path.abspath(project_path),
                 "user_request": user_request,
@@ -155,12 +170,20 @@ class Orchestrator:
             result = self.execute(skill, input_data)
             steps.append({"skill": skill.name, "result": result})
 
+            status = "unknown"
             if isinstance(result, dict):
+                status = result.get("status", "unknown")
                 meta = result.get("_meta", {})
                 if isinstance(meta, dict):
                     skill_tokens += meta.get("tokens", 0)
                 if result.get("status") == "success":
                     previous_results[skill.name] = result.get("data", {})
+
+            if progress_callback:
+                progress_callback("skill_done", {
+                    "skill": skill.name,
+                    "status": status,
+                })
 
         output = {
             "success": True,
@@ -171,4 +194,8 @@ class Orchestrator:
                 "total_tokens": skill_tokens,
             },
         }
+
+        if progress_callback:
+            progress_callback("complete", {"summary": output["summary"]})
+
         return output

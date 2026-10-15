@@ -7,7 +7,7 @@ import subprocess
 import tempfile
 import shutil
 import platform
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 from datetime import datetime
 
@@ -37,6 +37,8 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_skills()
         elif parsed.path == "/api/choose-folder":
             self._handle_choose_folder()
+        elif parsed.path == "/api/analyze-stream":
+            self._handle_analyze_stream(parsed)
         elif parsed.path == "/api/report":
             self._serve_report(parsed)
         else:
@@ -82,24 +84,19 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self._send_json(500, {"error": str(e)})
 
-    # ---- 文件夹选择对话框 ----
+    # ---- 文件夹选择 ----
 
     def _handle_choose_folder(self):
-        """调用系统原生文件夹选择对话框，返回选中的路径。"""
         system = platform.system()
         try:
             if system == "Darwin":
-                # macOS：使用 osascript 调用 Finder 选择框
                 result = subprocess.run(
                     ["osascript", "-e",
                      'POSIX path of (choose folder with prompt "选择项目文件夹")'],
                     capture_output=True, text=True, timeout=300
                 )
-                # 用户取消时 returncode 非 0，stdout 为空
                 path = result.stdout.strip().rstrip("/") if result.returncode == 0 else ""
-
             elif system == "Windows":
-                # Windows：使用 PowerShell 调用 FolderBrowserDialog
                 ps_script = (
                     "Add-Type -AssemblyName System.Windows.Forms; "
                     "$f = New-Object System.Windows.Forms.FolderBrowserDialog; "
@@ -111,9 +108,7 @@ class Handler(BaseHTTPRequestHandler):
                     capture_output=True, text=True, timeout=300
                 )
                 path = result.stdout.strip()
-
             else:
-                # Linux：尝试 zenity
                 result = subprocess.run(
                     ["zenity", "--file-selection", "--directory",
                      "--title=选择项目文件夹"],
@@ -124,9 +119,7 @@ class Handler(BaseHTTPRequestHandler):
             if path:
                 self._send_json(200, {"path": path})
             else:
-                # 用户取消或没选中
                 self._send_json(200, {"path": "", "cancelled": True})
-
         except subprocess.TimeoutExpired:
             self._send_json(408, {"error": "folder selection timed out"})
         except FileNotFoundError:
@@ -136,7 +129,104 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self._send_json(500, {"error": str(e)})
 
-    # ---- 分析接口 ----
+    # ---- 分析（SSE 流式） ----
+
+    def _handle_analyze_stream(self, parsed):
+        params = parse_qs(parsed.query)
+        project_path = params.get("project_path", [""])[0].strip()
+        request = params.get("request", [""])[0].strip() or "提取这个系统的业务规则"
+        report_dir = params.get("report_dir", [""])[0].strip()
+
+        # 设置 SSE 响应头
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+
+        def send_event(event, data):
+            try:
+                msg = f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+                self.wfile.write(msg.encode("utf-8"))
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+        if not project_path:
+            send_event("error", {"error": "project path is required"})
+            return
+
+        temp_clone_dir = None
+        try:
+            # Git URL 先克隆
+            if project_path.startswith(("http://", "https://", "git@")):
+                send_event("progress", {"stage": "clone", "message": "正在克隆 Git 仓库..."})
+                temp_clone_dir = tempfile.mkdtemp(prefix="code_analyzer_")
+                clone_target = os.path.join(temp_clone_dir, "repo")
+                result = subprocess.run(
+                    ["git", "clone", "--depth", "1", project_path, clone_target],
+                    capture_output=True, text=True, timeout=300
+                )
+                if result.returncode != 0:
+                    send_event("error", {"error": f"git clone failed: {result.stderr.strip()}"})
+                    return
+                project_path = clone_target
+
+            if not os.path.isdir(project_path):
+                send_event("error", {"error": f"path does not exist: {project_path}"})
+                return
+
+            # CodeGraph 索引
+            codegraph_dir = os.path.join(project_path, ".codegraph")
+            if not os.path.isdir(codegraph_dir):
+                send_event("progress", {"stage": "index", "message": "正在构建代码索引..."})
+                init_result = subprocess.run(
+                    ["codegraph", "init", "-i"],
+                    cwd=project_path, capture_output=True, text=True, timeout=600
+                )
+                if init_result.returncode != 0:
+                    send_event("error", {
+                        "error": f"codegraph init failed: {init_result.stderr.strip()}"
+                    })
+                    return
+
+            # 进度回调，把 orchestrator 的事件转发到 SSE
+            def progress_callback(event, data):
+                send_event("progress", {"stage": event, **data})
+
+            llm = None
+            try:
+                llm = LLMClient()
+            except ValueError:
+                pass
+
+            orch = Orchestrator(SKILLS_ROOT, llm=llm)
+            orch.load_skills()
+            result = orch.run(request, project_path, progress_callback=progress_callback)
+
+            # 保存报告
+            if not report_dir:
+                report_dir = project_path
+            if not os.path.isdir(report_dir):
+                os.makedirs(report_dir, exist_ok=True)
+
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            report_file = os.path.join(report_dir, f"analysis_report_{timestamp}.json")
+            with open(report_file, "w", encoding="utf-8") as f:
+                json.dump(result, f, ensure_ascii=False, indent=2)
+
+            send_event("complete", {"result": result, "report_path": report_file})
+
+        except subprocess.TimeoutExpired:
+            send_event("error", {"error": "operation timed out"})
+        except Exception as e:
+            send_event("error", {"error": str(e)})
+        finally:
+            if temp_clone_dir and os.path.isdir(temp_clone_dir):
+                shutil.rmtree(temp_clone_dir, ignore_errors=True)
+
+    # ---- 分析（同步，兼容旧接口） ----
 
     def _handle_analyze(self):
         try:
@@ -157,7 +247,6 @@ class Handler(BaseHTTPRequestHandler):
 
         temp_clone_dir = None
         try:
-            # Git URL 先克隆
             if project_path.startswith(("http://", "https://", "git@")):
                 temp_clone_dir = tempfile.mkdtemp(prefix="code_analyzer_")
                 clone_target = os.path.join(temp_clone_dir, "repo")
@@ -174,7 +263,6 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(400, {"error": f"path does not exist: {project_path}"})
                 return
 
-            # 如果没有 codegraph 索引，自动初始化
             codegraph_dir = os.path.join(project_path, ".codegraph")
             if not os.path.isdir(codegraph_dir):
                 init_result = subprocess.run(
@@ -187,7 +275,6 @@ class Handler(BaseHTTPRequestHandler):
                     })
                     return
 
-            # 跑 Agent
             llm = None
             try:
                 llm = LLMClient()
@@ -198,7 +285,6 @@ class Handler(BaseHTTPRequestHandler):
             orch.load_skills()
             result = orch.run(request, project_path)
 
-            # 保存报告
             if not report_dir:
                 report_dir = project_path
             if not os.path.isdir(report_dir):
@@ -238,7 +324,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     port = int(os.environ.get("PORT", 8080))
-    server = HTTPServer(("127.0.0.1", port), Handler)
+    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     print(f"Server running at http://127.0.0.1:{port}")
     print("Press Ctrl+C to stop.")
     try:
