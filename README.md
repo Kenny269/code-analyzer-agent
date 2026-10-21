@@ -13,7 +13,7 @@
 - **代码结构分析**：识别模块划分、目录组织、构建系统
 - **调用链分析**：查询某个函数的调用者和被调用者
 - **影响分析**：评估修改某个符号会影响哪些代码
-- **业务规则抽取**：从代码中提取业务人员能看懂的自然语言规则
+- **业务规则抽取**：从代码中提取业务人员能看懂的自然语言规则（支持意图聚焦与智能打分）
 - **业务流程重建**：从代码还原端到端的业务流程
 - **死代码检测**：识别疑似未使用的函数和类（辅助人工复核）
 - **循环依赖检测**：发现模块间的循环依赖，识别重构阻塞点
@@ -38,12 +38,11 @@
 │  编排层                                                      │
 │  orchestrator.py                                            │
 │  - 加载所有技能                                              │
-│  - 根据用户请求选择技能（LLM 语义匹配 / 关键词回退）           │
+│  - 意图理解：解析自然语言，提取技能与参数（如 symbol, focus） │
 │  - 展开技能依赖（depends_on），做拓扑排序                     │
 │  - 按顺序执行技能，串联上下文                                 │
 │  - 通过 progress_callback 上报进度                           │
-│  - 汇总 token 消耗                                          │
-│  - 返回结构化 dict                                          │
+│  - 汇总 token 消耗并返回结构化 dict                          │
 └─────────────────────────┬───────────────────────────────────┘
                           │
                           ▼
@@ -63,7 +62,7 @@
 │  - project-structure                                        │
 │  - call-chain                                               │
 │  - impact-analysis                                          │
-│  - business-rule-extraction                                 │
+│  - business-rule-extraction（焦点驱动 + 智能打分）           │
 │  - business-flow-reconstruction                             │
 │  - dead-code-detection                                      │
 │  - dependency-cycle-detection                               │
@@ -79,39 +78,19 @@
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 模块耦合关系
+### 模块耦合与智能调度
 
-**入口层**负责接收用户输入，不做业务逻辑，只是把 `project_path` + `user_request` 传给编排器。
+**意图理解与参数提取**：
+`orchestrator.py` 中的 `LLMSelector` 不再只负责选技能，还会从自然语言中提取执行参数。例如，用户输入“提取订单、优惠券相关的业务规则”，LLM 会输出 `{"skills": ["business-rule-extraction"], "params": {"focus": ["order", "coupon"]}}`。
 
-- `main.py`：解析命令行参数
-- `server.py`：解析 HTTP 请求，提供 Web 界面、SSE 进度流、REST API
-- `mcp_server.py`：实现 MCP 协议，把能力暴露为 MCP 工具，供 AI IDE 调用
+**焦点驱动的业务规则抽取**：
+`business-rule-extraction` 抛弃了盲目遍历全库的低效做法，引入了智能打分与配额机制：
+1. **目录排雷**：强制跳过前端目录（`frontend`, `admin`, `vue`等）、测试目录和依赖库。
+2. **权重打分**：文件路径命中 `focus` 关键词加 100 分，位于 `service/biz/domain` 核心层加 50 分，工具类（`util`, `config`）降权。
+3. **防垄断配额**：按得分扫描前 120 个文件，并限制单一巨型文件（如 2000 行的 `OrderServiceImpl`）最多只能贡献 10 个候选点，确保跨模块业务规则不被淹没。
 
-三个入口共用同一个 `Orchestrator`。
-
-**编排层**是系统的核心调度中心。它启动时通过 `skill_loader` 扫描 `skills/` 目录，把所有技能的元数据（`name` + `description` + `depends_on`）读入内存。用户请求到来时，通过 LLM 语义匹配选出最相关的技能（一个或多个）。如果 LLM 不可用，则回退到关键词匹配。之后，编排器会展开技能的依赖，做拓扑排序，确保依赖先执行。
-
-`orchestrator.run()` 支持可选的 `progress_callback` 参数，在执行每个阶段时回调，用于向调用方（如 Web 的 SSE 流）上报进度。
-
-返回结构化的 dict：
-
-```python
-{
-  "success": True,
-  "steps": [ {"skill": "...", "result": {...}}, ... ],
-  "summary": {
-    "requested_skills": [...],   # 用户请求选中的
-    "executed_skills": [...],    # 实际执行的（含依赖）
-    "total_tokens": 1234
-  }
-}
-```
-
-**技能执行层**以子进程方式运行技能脚本。每个技能脚本从 `stdin` 读 JSON，向 `stdout` 写 JSON。这样做的好处是技能之间完全隔离，任何技能崩溃都不会影响编排器，且技能可以用任意语言实现。技能脚本输出中的 `_meta.tokens` 字段会被编排器收集，用于汇总 token 消耗。
-
-**技能层**是能力的具体实现。每个技能是一个独立目录，包含 `SKILL.md`（元数据 + 执行说明）和 `scripts/`（实现代码）。新增技能不需要改任何核心代码，只需在 `skills/` 下新建目录。技能之间的数据传递通过 `previous_results` 字段：前一个技能的 `data` 会被塞入下一个技能的输入。
-
-**共享工具层**提供两个基础能力：`codegraph_client` 封装所有 CodeGraph CLI 调用，是所有代码结构信息的唯一来源；`llm_client` 封装所有 LLM 调用，处理重试、超时、token 计数。这两层被技能层和编排层共用。替换 CodeGraph 为 MCP 只需改 `codegraph_client.py`，替换 LLM 服务商只需改 `.env`。
+**SSE 进度反馈与防死锁**：
+Web 端使用 `ThreadingHTTPServer` 和 `Server-Sent Events (SSE)` 推送进度。前端收到 `complete` 或 `error` 事件时，主动调用 `reader.cancel()` 断开底层长连接，并在 `finally` 块中恢复按钮状态，彻底解决长时间分析导致的 UI 挂起和按钮变灰问题。
 
 ### 数据流
 
@@ -121,7 +100,7 @@
    ▼
 Orchestrator.run(progress_callback)
    │
-   ├─→ Selector.select()         选择技能
+   ├─→ Selector.select()         意图理解与参数提取
    ├─→ resolve_dependencies()    展开依赖，拓扑排序
    │
    ├─→ 对每个技能（含依赖）：
@@ -131,8 +110,7 @@ Orchestrator.run(progress_callback)
    │     │     │
    │     │     ├─→ 技能脚本读取 stdin JSON
    │     │     ├─→ 读取 previous_results
-   │     │     ├─→ 查询 CodeGraph（如需要）
-   │     │     ├─→ 调用 LLM（如需要）
+   │     │     ├─→ 查询 CodeGraph / LLM
    │     │     └─→ 输出 stdout JSON
    │     │
    │     ├─→ progress_callback("skill_done", {skill, status})
@@ -157,44 +135,24 @@ code_analyzing_agent/
 ├── Plan.md                          # 项目规划文档
 ├── agent/
 │   ├── __init__.py
-│   ├── orchestrator.py              # 编排器 + 技能选择 + 依赖解析 + 进度回调
+│   ├── orchestrator.py              # 编排器 + 意图提取 + 依赖解析
 │   ├── skill_loader.py              # 技能发现与元数据解析
 │   ├── skill_runner.py              # 技能执行引擎
 │   ├── codegraph_client.py          # CodeGraph CLI 封装
 │   └── llm_client.py                # LLM 调用封装
 ├── skills/
 │   ├── project-structure/
-│   │   ├── SKILL.md
-│   │   └── scripts/analyze.py
 │   ├── call-chain/
-│   │   ├── SKILL.md
-│   │   └── scripts/analyze.py
 │   ├── impact-analysis/
-│   │   ├── SKILL.md
-│   │   └── scripts/analyze.py
-│   ├── business-rule-extraction/
-│   │   ├── SKILL.md
-│   │   └── scripts/analyze.py
+│   ├── business-rule-extraction/    # 焦点驱动与智能打分
 │   ├── business-flow-reconstruction/
-│   │   ├── SKILL.md
-│   │   └── scripts/analyze.py
 │   ├── dead-code-detection/
-│   │   ├── SKILL.md
-│   │   └── scripts/analyze.py
 │   ├── dependency-cycle-detection/
-│   │   ├── SKILL.md
-│   │   └── scripts/analyze.py
 │   └── report-generation/
-│       ├── SKILL.md
-│       └── scripts/analyze.py
 ├── static/
 │   ├── index.html                   # Web 前端页面
 │   ├── style.css
 │   └── app.js
-├── .cursor/
-│   └── mcp.json                     # Cursor MCP 配置（不提交）
-└── .vscode/
-    └── mcp.json                     # VS Code MCP 配置（不提交）
 ```
 
 ---
@@ -248,29 +206,11 @@ python3 main.py <项目路径> "<分析请求>"
 示例：
 
 ```bash
-# 项目结构分析
 python3 main.py /path/to/project "分析项目结构"
-
-# 业务规则抽取
-python3 main.py /path/to/project "提取这个系统的业务规则"
-
-# 业务流程重建（自动执行依赖技能）
-python3 main.py /path/to/project "重建业务流程"
-
-# 死代码检测
+python3 main.py /path/to/project "提取订单和优惠券的业务规则"
+python3 main.py /path/to/project "重建下单到支付的业务流程"
 python3 main.py /path/to/project "检测死代码"
-
-# 循环依赖检测
-python3 main.py /path/to/project "检测循环依赖"
-
-# 调用链分析
 python3 main.py /path/to/project "分析 create_task 的调用链"
-
-# 影响分析
-python3 main.py /path/to/project "改动 create_task 的影响"
-
-# 多技能链式调用
-python3 main.py /path/to/project "生成一份项目报告"
 ```
 
 ### 方式二：Web 界面
@@ -282,28 +222,24 @@ cd code_analyzing_agent
 python3 server.py
 ```
 
-浏览器打开：
-
-```
-http://127.0.0.1:8080
-```
+浏览器打开 `http://127.0.0.1:8080`。
 
 界面交互：
 
-- **项目路径**：点击「选择文件夹」按钮，弹出系统原生对话框选择目录；或直接粘贴 Git 仓库 URL
-- **分析类型**：下拉选择，无需手动输入文字
-- **目标符号名**：选择「分析调用链」或「分析修改影响」时自动出现
-- **高级选项**：可折叠，用于自定义报告保存位置
-- **实时进度**：分析过程中，页面显示进度步骤，每个技能依次点亮。当前运行的技能显示"正在执行"，完成的显示"完成 ✓"
-- **导出报告**：分析完成后，结果卡片右上角出现「导出报告」按钮，一键下载 Markdown 文件
-- **分析历史**：页面底部维护最近 10 次分析记录，点击任意一条即可重新加载结果，无需重跑
+- **项目路径**：点击「选择文件夹」按钮弹出系统原生对话框，或直接粘贴 Git URL。
+- **自由输入**：像聊天一样描述需求（如“看看订单模块的规则”），系统自动提取意图和参数。
+- **快捷示例**：点击下方的 Chip 快速填入常见请求。
+- **精确模式**：展开高级选项，手动指定技能。
+- **实时进度**：页面实时显示克隆、索引、执行的进度步骤，且不会卡死按钮。
+- **导出报告**：分析完成后，一键下载 Markdown 文件。
+- **分析历史**：底部分析历史（localStorage），点击任意一条即可秒载结果，无需重跑。
 
 分析结果按技能类型分别可视化：
 
 | 技能 | 可视化形式 |
 |------|-----------|
 | 项目结构 | 模块卡片列表，显示文件数与文件清单 |
-| 业务规则 | 蓝色边线卡片，显示规则描述、分类、代码位置 |
+| 业务规则 | 按业务能力分组，显示规则描述、分类、代码位置 |
 | 业务流程 | 流程卡片，含有序步骤列表和业务总结 |
 | 死代码 | 表格 + 置信度徽章 + 复核建议 |
 | 循环依赖 | 循环卡片列表，标注严重程度和涉及文件 |
@@ -311,29 +247,14 @@ http://127.0.0.1:8080
 | 影响分析 | 彩色风险横幅 + 受影响符号表格 |
 | 报告生成 | Markdown 渲染为 HTML |
 
-如果传入的是 Git URL，后端会自动 clone 到临时目录，分析完成后自动清理。如果项目没有 `.codegraph` 索引，后端会自动执行 `codegraph init -i`。
-
-**关于历史记录**：历史记录存在浏览器 localStorage 里，不会上传到服务器，也不占用服务器空间。每个浏览器的历史相互独立。清空历史会删除所有本机记录。
-
 ### 方式三：MCP 协议（IDE 集成）
 
-MCP Server 通过 stdio 传输暴露两个工具：
+MCP Server 通过 stdio 传输暴露工具：
 
 - `analyze_project(project_path, request)`：执行分析，返回 JSON
 - `list_skills()`：返回可用技能列表
 
-#### 用 MCP Inspector 调试
-
-```bash
-mcp dev mcp_server.py
-```
-
-浏览器打开 `http://localhost:3000`，配置 Command 为 `python3`，Arguments 为 `mcp_server.py` 的绝对路径，点 Connect，然后测试工具。
-
-#### 接入 Cursor
-
-在项目根目录创建 `.cursor/mcp.json`：
-
+在 Cursor 或 VS Code 的 `mcp.json` 中配置：
 ```json
 {
   "mcpServers": {
@@ -345,125 +266,24 @@ mcp dev mcp_server.py
 }
 ```
 
-打开 Cursor，它会自动读取该配置。在 Chat 里输入「用 code-analyzer 分析 Py_test 项目结构」即可。
-
-#### 接入 VS Code
-
-在项目根目录创建 `.vscode/mcp.json`：
-
-```json
-{
-  "servers": {
-    "code-analyzer": {
-      "type": "stdio",
-      "command": "python3",
-      "args": ["/abs/path/to/mcp_server.py"]
-    }
-  }
-}
-```
-
-需要安装 GitHub Copilot 插件。MCP 工具会自动出现在 Copilot Chat 的工具列表中。
-
-#### 接入 Claude Code
-
-```bash
-claude mcp add code-analyzer python3 /abs/path/to/mcp_server.py
-```
-
-之后在对话里说「用 code-analyzer 分析一下这个项目」即可。
-
 ---
 
 ## 现有技能
 
 | 技能 | 用途 | 依赖 |
 |------|------|------|
-| `project-structure` | 分析模块划分、目录结构、构建系统 | CodeGraph |
-| `call-chain` | 查询指定符号的调用者和被调用者 | CodeGraph |
+| `project-structure` | 分析模块划分、目录结构 | CodeGraph |
+| `call-chain` | 查询符号的调用者和被调用者 | CodeGraph |
 | `impact-analysis` | 评估修改某个符号的影响范围 | CodeGraph |
-| `business-rule-extraction` | 从代码中抽取业务规则（自然语言） | CodeGraph + LLM |
-| `business-flow-reconstruction` | 从代码重建端到端业务流程 | project-structure + business-rule-extraction |
+| `business-rule-extraction` | 抽取业务规则（支持 focus 聚焦） | CodeGraph + LLM |
+| `business-flow-reconstruction` | 重建端到端业务流程 | project-structure + business-rule-extraction |
 | `dead-code-detection` | 检测疑似死代码（需人工复核） | CodeGraph |
 | `dependency-cycle-detection` | 检测模块间的循环依赖 | 无（纯文件扫描 + Tarjan 算法） |
-| `report-generation` | 把分析结果转成可读报告 | LLM |
+| `report-generation` | 把结果转成可读报告 | LLM |
 
-### 技能依赖
+### 技能依赖与输出格式
 
-技能可以在 `SKILL.md` 的 frontmatter 里声明依赖，支持两种格式：
-
-**块格式：**
-
-```yaml
----
-name: business-flow-reconstruction
-description: ...
-depends_on:
-  - project-structure
-  - business-rule-extraction
----
-```
-
-**行内格式：**
-
-```yaml
-depends_on: [project-structure, business-rule-extraction]
-```
-
-编排器会做拓扑排序，自动先执行依赖的技能，把它们的输出通过 `previous_results` 传给当前技能。用户只需请求一个技能，依赖会自动展开。
-
-`summary` 里会区分：
-
-- `requested_skills`：用户请求选中的技能
-- `executed_skills`：实际执行的技能（包含依赖）
-
-### 如何新增一个技能
-
-1. 在 `skills/` 下创建新目录，例如 `skills/my-skill/`
-2. 创建 `SKILL.md`，写入 YAML frontmatter：
-
-```markdown
----
-name: my-skill
-description: 这个技能做什么，什么时候使用。描述要包含触发关键词。
-depends_on: []  # 可选，声明依赖
----
-
-# My Skill
-
-## Steps
-1. ...
-2. ...
-
-## Output Format
-返回 JSON，包含 ...
-```
-
-3. 创建 `scripts/analyze.py`，从 `stdin` 读 JSON，向 `stdout` 写 JSON：
-
-```python
-import sys
-import json
-
-payload = json.loads(sys.stdin.read())
-project_path = payload["input"]["project_path"]
-previous_results = payload["input"].get("previous_results", {})
-# ... 你的逻辑 ...
-print(json.dumps({
-    "status": "success",
-    "data": {...},
-    "error": None,
-    "_meta": {"tokens": 0},
-}, ensure_ascii=False))
-```
-
-不需要改任何核心代码，`skill_loader` 会自动发现新技能。
-
----
-
-## 输出格式
-
-### 技能输出协议
+技能可以在 `SKILL.md` 的 frontmatter 里声明 `depends_on`。编排器会自动拓扑排序。所有技能统一遵循以下输出协议：
 
 ```json
 {
@@ -474,95 +294,43 @@ print(json.dumps({
 }
 ```
 
-- `status`：`success` 或 `error`
-- `data`：技能的具体输出
-- `error`：错误信息（成功时为 `null`）
-- `_meta.tokens`：该技能消耗的 LLM token 数（用于汇总）
-
-### 编排器输出结构
+编排器汇总后的输出：
 
 ```json
 {
   "success": true,
   "steps": [
-    { "skill": "project-structure", "result": { ... } },
-    { "skill": "report-generation", "result": { ... } }
+    { "skill": "project-structure", "result": { ... } }
   ],
   "summary": {
-    "requested_skills": ["report-generation"],
-    "executed_skills": ["project-structure", "report-generation"],
+    "requested_skills": ["business-rule-extraction"],
+    "executed_skills": ["business-rule-extraction"],
+    "params": {"focus": ["order", "coupon"]},
     "total_tokens": 1554
   }
 }
 ```
 
-`steps` 始终是数组，即使只执行了一个技能。
-
-### 进度事件
-
-当使用 SSE 端点 `/api/analyze-stream` 时，服务端会推送以下事件：
-
-| 事件 | 数据 | 说明 |
-|------|------|------|
-| `progress` | `{stage: "clone", message}` | 正在克隆 Git 仓库 |
-| `progress` | `{stage: "index", message}` | 正在构建 CodeGraph 索引 |
-| `progress` | `{stage: "selecting", message}` | 正在选择技能 |
-| `progress` | `{stage: "resolved", requested, executed}` | 技能依赖已解析 |
-| `progress` | `{stage: "skill_start", skill}` | 某个技能开始执行 |
-| `progress` | `{stage: "skill_done", skill, status}` | 某个技能执行完成 |
-| `complete` | `{result, report_path}` | 整体分析完成 |
-| `error` | `{error}` | 发生错误 |
-
----
-
-## 兼容性
-
-- Mac / Windows 均兼容
-- 路径处理使用 `os.path`，不做硬编码
-- 文件夹选择对话框：macOS 用 `osascript`，Windows 用 PowerShell，Linux 用 `zenity`
-- Web 服务使用 Python 标准库 `ThreadingHTTPServer`，支持并发请求，无额外框架依赖
-- MCP Server 使用官方 `mcp` SDK
-- 前端无框架，原生 HTML + CSS + JS
-- 历史记录使用 localStorage，不依赖后端存储
-
----
-
-## 常见问题
-
-| 问题 | 原因 | 解决 |
-|------|------|------|
-| `codegraph: command not found` | CodeGraph 未安装或未在 PATH | `npm i -g @colbymchenry/codegraph`，或参考官方安装文档 |
-| LLM disabled | `.env` 未配置或 Key 无效 | 检查 `.env` 文件，确认 `LLM_API_KEY` 正确 |
-| 分析结果为空 | 项目未建 CodeGraph 索引 | 进入项目目录执行 `codegraph init -i` |
-| 报告保存失败 | 目标目录无写权限 | 在 Web 界面指定一个有写权限的目录 |
-| 浏览器打不开 | 端口被占用 | `PORT=8090 python3 server.py` |
-| Git clone 超时 | 网络问题或仓库太大 | 换用本地路径，或增大 `server.py` 中的 timeout |
-| 文件夹选择对话框不弹出 | 系统命令不可用 | macOS 需 `osascript`，Windows 需 PowerShell，Linux 需 `zenity` |
-| 分析进度停滞 | 某个技能耗时较长 | 观察终端日志；可能是 LLM 调用慢或大项目索引耗时长 |
-| 分析历史丢失 | 浏览器清除了 localStorage | 历史记录不持久化到磁盘，清除浏览器数据会丢失 |
-| MCP Inspector 连接失败 | Command / Arguments 填错 | Command 只填 `python3`，路径填到 Arguments 里 |
-| npm 缓存报 EEXIST | npm 缓存损坏 | `npm cache clean --force`，必要时删 `~/.npm/_cacache` |
-
 ---
 
 ## 更新记录
 
-- **v0.1**（2026-09-24）：单脚本 Demo，逐文件摘要 + 汇总报告
-- **v0.2**（2026-09-28）：Skill 化改造，接入 CodeGraph，5 个技能，LLM 语义选择，Web 界面
-- **v0.3**（2026-09-29）：MCP Server，IDE 集成，orchestrator 返回结构化 dict，前端技能列表
-- **v0.4**（2026-09-30）：业务流程重建技能，死代码检测技能，Skill 依赖机制（depends_on），前端多类型可视化，文件夹选择对话框，下拉选择分析类型，导出 Markdown 报告
-- **v0.5**（2026-10-15）：循环依赖检测技能，SSE 实时进度反馈，分析历史记录（localStorage），ThreadingHTTPServer 并发支持，技能中文标签
+- **v0.1**（2026-09-24）：单脚本 Demo，逐文件摘要 + 汇总报告。
+- **v0.2**（2026-09-28）：Skill 化改造，接入 CodeGraph，5 个技能，LLM 语义选择，Web 界面。
+- **v0.3**（2026-09-29）：MCP Server，IDE 集成，orchestrator 返回结构化 dict，前端技能列表。
+- **v0.4**（2026-09-30）：业务流程重建技能，死代码检测技能，Skill 依赖机制（depends_on），前端多类型可视化，文件夹选择对话框，下拉选择分析类型，导出 Markdown 报告。
+- **v0.5**（2026-10-15）：循环依赖检测技能，SSE 实时进度反馈，分析历史记录（localStorage），ThreadingHTTPServer 并发支持，技能中文标签。
+- **v0.6**（2026-10-21）：**自然语言意图提取与参数解析（focus/symbol），焦点驱动的业务规则抽取（目录排雷与智能打分防垄断），修复 SSE 长连接导致的 UI 按钮死锁**。
 
 ---
 
 ## 后续计划
 
-- 在真实的 1000+ 文件项目上验证架构
-- 设计本体 schema，把分析结果写入本体，支持增量分析
-- 增加更多技能：数据流分析、技术债务量化、API 清单生成、敏感信息扫描
-- 接入多智能体协作，支持并行分析和交叉验证
-- 完善链式调用，支持技能并行执行
+- 在真实的 1000+ 文件大型项目（如电商系统）上验证全量业务流程重建。
+- 引入本体（Ontology）构建，把分析结果沉淀为图数据库，支持增量分析。
+- 增加更多技能：技术债务量化、API 清单生成、敏感信息扫描。
+- 支持多个技能并行执行，缩短分析时间。
 
 ---
 
-*本 README 随项目推进持续更新。*
+*本 README 随项目推进持续更新，每次更新仅在“更新记录”追加。*

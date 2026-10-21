@@ -29,27 +29,44 @@
       </div>
 
       <div class="field">
-        <label for="skillSelect">分析类型</label>
-        <select id="skillSelect">
-          <option value="分析项目结构">分析项目结构</option>
-          <option value="提取这个系统的业务规则">抽取业务规则</option>
-          <option value="重建业务流程">重建业务流程</option>
-          <option value="检测死代码">检测死代码</option>
-          <option value="检测循环依赖">检测循环依赖</option>
-          <option value="call-chain">分析调用链</option>
-          <option value="impact-analysis">分析修改影响</option>
-          <option value="生成一份项目报告">生成完整项目报告</option>
-        </select>
-      </div>
-
-      <div class="field" id="symbolField" style="display:none;">
-        <label for="symbolInput">目标符号名</label>
-        <input type="text" id="symbolInput" placeholder="例如 create_task">
-        <p class="field-hint">请输入要分析的函数或类名</p>
+        <label for="requestInput">你想了解什么？</label>
+        <textarea id="requestInput" rows="3" placeholder="用自然语言描述你的分析目标，例如：
+· 分析优惠券相关的业务规则
+· 看看 create_task 被谁调用了
+· 这个项目哪里耦合最严重
+· 帮我梳理订单的完整业务流程"></textarea>
+        <div class="chips" id="exampleChips">
+          <span class="chip" data-request="提取这个系统的业务规则">抽取业务规则</span>
+          <span class="chip" data-request="重建业务流程">重建业务流程</span>
+          <span class="chip" data-request="检测循环依赖">检测循环依赖</span>
+          <span class="chip" data-request="分析项目结构">项目结构分析</span>
+          <span class="chip" data-request="检测死代码">检测死代码</span>
+        </div>
       </div>
 
       <details class="advanced">
         <summary>高级选项</summary>
+
+        <div class="field">
+          <label for="skillSelect">精确模式：指定技能</label>
+          <select id="skillSelect">
+            <option value="">（使用上方自然语言输入）</option>
+            <option value="分析项目结构">分析项目结构</option>
+            <option value="提取这个系统的业务规则">抽取业务规则</option>
+            <option value="重建业务流程">重建业务流程</option>
+            <option value="检测死代码">检测死代码</option>
+            <option value="检测循环依赖">检测循环依赖</option>
+            <option value="call-chain">分析调用链</option>
+            <option value="impact-analysis">分析修改影响</option>
+            <option value="生成一份项目报告">生成完整项目报告</option>
+          </select>
+        </div>
+
+        <div class="field" id="symbolField" style="display:none;">
+          <label for="symbolInput">目标符号名</label>
+          <input type="text" id="symbolInput" placeholder="例如 create_task">
+        </div>
+
         <div class="field">
           <label for="reportDir">报告保存位置</label>
           <div class="input-group">
@@ -66,6 +83,11 @@
 
       <div class="progress-container" id="progressContainer" style="display:none;">
         <div class="progress-steps" id="progressSteps"></div>
+      </div>
+
+      <div class="clarification-box" id="clarificationBox" style="display:none;">
+        <strong>需要补充信息：</strong>
+        <span id="clarificationText"></span>
       </div>
     </section>
 

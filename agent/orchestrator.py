@@ -10,52 +10,64 @@ ProgressCallback = Optional[Callable[[str, dict], None]]
 
 
 class LLMSelector:
-    """用 LLM 根据用户请求选择技能。支持选择多个技能按顺序执行。"""
+    """用 LLM 从自然语言请求中提取技能、参数和澄清问题。"""
 
     def __init__(self, llm: LLMClient):
         self.llm = llm
 
-    def select(self, user_request: str, skills: List[SkillMeta]) -> List[SkillMeta]:
+    def select_with_params(self, user_request: str, skills: List[SkillMeta]) -> dict:
         if not skills:
-            return []
+            return {"skills": [], "params": {}, "clarification": None}
         if len(skills) == 1:
-            return [skills[0]]
+            return {"skills": [skills[0]], "params": {}, "clarification": None}
 
         skill_list = "\n".join(
             f"- {s.name}: {s.description}" for s in skills
         )
 
         system = (
-            "你是一个任务调度器。根据用户请求，从可用技能中选择一个或多个技能。\n"
-            "如果需要多个技能，按执行顺序排列，用英文逗号分隔。\n"
-            "只返回技能名称，不要返回任何其他内容。\n"
-            "如果没有合适的技能，返回 NONE。\n\n"
-            "示例：\n"
-            "用户请求：生成一份项目报告\n"
-            "返回：project-structure,report-generation"
+            "你是一个任务调度器。根据用户的自然语言请求，选择要执行的技能，"
+            "并提取执行所需的参数。\n\n"
+            "参数提取规则：\n"
+            "- call-chain 和 impact-analysis 需要 symbol 参数（函数名或类名）\n"
+            "- business-rule-extraction 可选 focus 参数（一个英文单词数组，代表关注的业务域，如 ['order', 'coupon', 'pay']）\n"
+            "- 其他技能不需要参数\n\n"
+            "如果用户请求太模糊，无法判断要执行什么，把 clarification 设为需要用户补充的问题。\n\n"
+            "输出 JSON，格式：\n"
+            "{\n"
+            "  \"skills\": [\"技能名\"],\n"
+            "  \"params\": {\"symbol\": \"...\", \"focus\": [\"...\"]},\n"
+            "  \"clarification\": null\n"
+            "}\n\n"
+            "只输出 JSON，不要输出任何其他内容。"
         )
-        user = f"可用技能：\n{skill_list}\n\n用户请求：{user_request}\n\n请选择技能："
+        user = f"可用技能：\n{skill_list}\n\n用户请求：{user_request}"
 
         try:
-            chosen = self.llm.chat(system, user, temperature=0.0).strip()
+            result = self.llm.chat_json(system, user, temperature=0.0)
         except Exception:
-            return []
+            return {"skills": [], "params": {}, "clarification": None}
 
-        if chosen.upper() == "NONE" or not chosen:
-            return []
+        skill_names = result.get("skills", [])
+        params = result.get("params", {}) or {}
+        clarification = result.get("clarification")
 
-        names = [n.strip() for n in chosen.split(",") if n.strip()]
         selected = []
-        for name in names:
+        for name in skill_names:
             for s in skills:
                 if s.name == name:
                     selected.append(s)
                     break
-        return selected
+
+        return {
+            "skills": selected,
+            "params": params,
+            "clarification": clarification,
+        }
 
 
 class KeywordSelector:
-    """关键词匹配的 fallback 选择器。当 LLM 不可用时使用。"""
+    """关键词匹配的 fallback 选择器。"""
 
     KEYWORD_MAP = {
         "project-structure": ["结构", "模块", "目录", "组织", "架构", "structure"],
@@ -68,18 +80,18 @@ class KeywordSelector:
         "report-generation": ["报告", "总结", "report", "summary"],
     }
 
-    def select(self, user_request: str, skills: List[SkillMeta]) -> List[SkillMeta]:
+    def select_with_params(self, user_request: str, skills: List[SkillMeta]) -> dict:
         request_lower = user_request.lower()
         selected = []
         for skill in skills:
             keywords = self.KEYWORD_MAP.get(skill.name, [])
             if any(kw in request_lower for kw in keywords):
                 selected.append(skill)
-        return selected
+        return {"skills": selected, "params": {}, "clarification": None}
 
 
 class Orchestrator:
-    """核心调度器。加载技能、选择技能、执行技能、返回结构化结果。"""
+    """核心调度器。"""
 
     def __init__(self, skills_root: str, llm: Optional[LLMClient] = None):
         self.loader = SkillLoader(skills_root)
@@ -105,8 +117,8 @@ class Orchestrator:
             for s in self.skills
         ]
 
-    def select_skills(self, user_request: str) -> List[SkillMeta]:
-        return self.selector.select(user_request, self.skills)
+    def select_skills(self, user_request: str) -> dict:
+        return self.selector.select_with_params(user_request, self.skills)
 
     def resolve_dependencies(self, selected: List[SkillMeta]) -> List[SkillMeta]:
         result = []
@@ -136,13 +148,18 @@ class Orchestrator:
             self.load_skills()
 
         if progress_callback:
-            progress_callback("selecting", {"message": "正在选择技能..."})
+            progress_callback("selecting", {"message": "正在理解你的需求..."})
 
-        selected = self.select_skills(user_request)
+        selection = self.select_skills(user_request)
+        selected = selection.get("skills", [])
+        params = selection.get("params", {}) or {}
+        clarification = selection.get("clarification")
+
         if not selected:
             return {
                 "success": False,
                 "error": "no matching skill",
+                "clarification": clarification,
                 "available_skills": [s.name for s in self.skills],
             }
 
@@ -152,6 +169,7 @@ class Orchestrator:
             progress_callback("resolved", {
                 "requested": [s.name for s in selected],
                 "executed": [s.name for s in skills_to_run],
+                "params": params,
             })
 
         previous_results = {}
@@ -165,6 +183,7 @@ class Orchestrator:
             input_data = {
                 "project_path": os.path.abspath(project_path),
                 "user_request": user_request,
+                "params": params,
                 "previous_results": previous_results,
             }
             result = self.execute(skill, input_data)
@@ -191,6 +210,7 @@ class Orchestrator:
             "summary": {
                 "requested_skills": [s.name for s in selected],
                 "executed_skills": [s.name for s in skills_to_run],
+                "params": params,
                 "total_tokens": skill_tokens,
             },
         }

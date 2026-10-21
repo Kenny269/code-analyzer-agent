@@ -47,6 +47,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path == "/api/analyze":
             self._handle_analyze()
+        elif self.path == "/api/analyze-stream":
+            self._handle_analyze_stream_post()
         else:
             self._send_json(404, {"error": "not found"})
 
@@ -129,7 +131,7 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self._send_json(500, {"error": str(e)})
 
-    # ---- 分析（SSE 流式） ----
+    # ---- 分析（SSE 流式，GET 兼容） ----
 
     def _handle_analyze_stream(self, parsed):
         params = parse_qs(parsed.query)
@@ -137,7 +139,6 @@ class Handler(BaseHTTPRequestHandler):
         request = params.get("request", [""])[0].strip() or "提取这个系统的业务规则"
         report_dir = params.get("report_dir", [""])[0].strip()
 
-        # 设置 SSE 响应头
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
@@ -157,9 +158,48 @@ class Handler(BaseHTTPRequestHandler):
             send_event("error", {"error": "project path is required"})
             return
 
+        self._run_analysis_stream(project_path, request, report_dir, send_event)
+
+    # ---- 分析（SSE 流式，POST） ----
+
+    def _handle_analyze_stream_post(self):
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length).decode("utf-8")
+            payload = json.loads(body)
+        except Exception as e:
+            self._send_json(400, {"error": f"invalid request: {e}"})
+            return
+
+        project_path = payload.get("project_path", "").strip()
+        request = payload.get("request", "").strip() or "提取这个系统的业务规则"
+        report_dir = payload.get("report_dir", "").strip()
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+
+        def send_event(event, data):
+            try:
+                msg = f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+                self.wfile.write(msg.encode("utf-8"))
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+        if not project_path:
+            send_event("error", {"error": "project path is required"})
+            return
+
+        self._run_analysis_stream(project_path, request, report_dir, send_event)
+
+    def _run_analysis_stream(self, project_path, request, report_dir, send_event):
+        """共享的分析流式执行逻辑。"""
         temp_clone_dir = None
         try:
-            # Git URL 先克隆
             if project_path.startswith(("http://", "https://", "git@")):
                 send_event("progress", {"stage": "clone", "message": "正在克隆 Git 仓库..."})
                 temp_clone_dir = tempfile.mkdtemp(prefix="code_analyzer_")
@@ -172,12 +212,12 @@ class Handler(BaseHTTPRequestHandler):
                     send_event("error", {"error": f"git clone failed: {result.stderr.strip()}"})
                     return
                 project_path = clone_target
+                send_event("progress", {"stage": "clone_done", "message": "仓库克隆完成"})
 
             if not os.path.isdir(project_path):
                 send_event("error", {"error": f"path does not exist: {project_path}"})
                 return
 
-            # CodeGraph 索引
             codegraph_dir = os.path.join(project_path, ".codegraph")
             if not os.path.isdir(codegraph_dir):
                 send_event("progress", {"stage": "index", "message": "正在构建代码索引..."})
@@ -190,8 +230,8 @@ class Handler(BaseHTTPRequestHandler):
                         "error": f"codegraph init failed: {init_result.stderr.strip()}"
                     })
                     return
+                send_event("progress", {"stage": "index_done", "message": "索引构建完成"})
 
-            # 进度回调，把 orchestrator 的事件转发到 SSE
             def progress_callback(event, data):
                 send_event("progress", {"stage": event, **data})
 
@@ -205,7 +245,6 @@ class Handler(BaseHTTPRequestHandler):
             orch.load_skills()
             result = orch.run(request, project_path, progress_callback=progress_callback)
 
-            # 保存报告
             if not report_dir:
                 report_dir = project_path
             if not os.path.isdir(report_dir):

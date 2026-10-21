@@ -5,6 +5,7 @@ const resultContent = document.getElementById('resultContent');
 const reportPathEl = document.getElementById('reportPath');
 const skillBadge = document.getElementById('skillBadge');
 const projectPathInput = document.getElementById('projectPath');
+const requestInput = document.getElementById('requestInput');
 const skillSelect = document.getElementById('skillSelect');
 const symbolField = document.getElementById('symbolField');
 const symbolInput = document.getElementById('symbolInput');
@@ -14,10 +15,12 @@ const progressContainer = document.getElementById('progressContainer');
 const progressSteps = document.getElementById('progressSteps');
 const historyList = document.getElementById('historyList');
 const clearHistoryBtn = document.getElementById('clearHistoryBtn');
+const clarificationBox = document.getElementById('clarificationBox');
+const clarificationText = document.getElementById('clarificationText');
 
 let currentResult = null;
 let currentProjectPath = '';
-let currentEventSource = null;
+let currentAbortController = null;
 
 const HISTORY_KEY = 'code_analyzer_history';
 const MAX_HISTORY = 10;
@@ -41,7 +44,6 @@ const SKILL_CONFIG = {
   "生成一份项目报告": { needsSymbol: false },
 };
 
-// 技能名 → 中文标签
 const SKILL_LABELS = {
   "project-structure": "项目结构分析",
   "call-chain": "调用链分析",
@@ -61,6 +63,15 @@ document.getElementById('chooseFolderBtn').addEventListener('click', () => choos
 document.getElementById('chooseReportDirBtn').addEventListener('click', () => chooseFolder(reportDirInput));
 skillSelect.addEventListener('change', onSkillChange);
 clearHistoryBtn.addEventListener('click', clearHistory);
+
+document.querySelectorAll('.chip').forEach(chip => {
+  chip.addEventListener('click', () => {
+    requestInput.value = chip.dataset.request || '';
+    skillSelect.value = '';
+    onSkillChange();
+    requestInput.focus();
+  });
+});
 
 onSkillChange();
 renderHistory();
@@ -94,17 +105,25 @@ async function chooseFolder(targetInput) {
 }
 
 function buildRequest() {
-  const value = skillSelect.value;
-  const config = SKILL_CONFIG[value];
+  const preset = skillSelect.value;
 
-  if (config && config.needsSymbol) {
-    const symbol = symbolInput.value.trim();
-    if (!symbol) {
-      return { error: '请填写目标符号名' };
+  if (preset) {
+    const config = SKILL_CONFIG[preset];
+    if (config && config.needsSymbol) {
+      const symbol = symbolInput.value.trim();
+      if (!symbol) {
+        return { error: '精确模式下请填写目标符号名' };
+      }
+      return { request: config.template.replace('{symbol}', symbol) };
     }
-    return { request: config.template.replace('{symbol}', symbol) };
+    return { request: preset };
   }
-  return { request: value };
+
+  const free = requestInput.value.trim();
+  if (!free) {
+    return { error: '请描述你想了解什么，或从快捷示例里选一个' };
+  }
+  return { request: free };
 }
 
 // ---- 进度显示 ----
@@ -112,6 +131,7 @@ function buildRequest() {
 function resetProgress() {
   progressSteps.innerHTML = '';
   progressContainer.style.display = 'block';
+  clarificationBox.style.display = 'none';
 }
 
 function hideProgress() {
@@ -136,11 +156,11 @@ function addOrUpdateStep(key, label, state) {
 
 function updateProgress(event, data) {
   if (event === 'selecting') {
-    addOrUpdateStep('selecting', '正在选择分析技能...', 'running');
+    addOrUpdateStep('selecting', data.message || '正在理解你的需求...', 'running');
   } else if (event === 'resolved') {
-    addOrUpdateStep('selecting', '技能选择完成', 'done');
+    addOrUpdateStep('selecting', '需求理解完成', 'done');
     const executed = data.executed || [];
-    executed.forEach((skillName, idx) => {
+    executed.forEach((skillName) => {
       addOrUpdateStep('skill-' + skillName,
         `执行 ${SKILL_LABELS[skillName] || skillName}`, '');
     });
@@ -157,7 +177,7 @@ function updateProgress(event, data) {
 
 // ---- 分析 ----
 
-function runAnalysis() {
+async function runAnalysis() {
   const projectPath = projectPathInput.value.trim();
   const reportDir = reportDirInput.value.trim();
 
@@ -172,83 +192,122 @@ function runAnalysis() {
     return;
   }
 
-  if (currentEventSource) {
-    currentEventSource.close();
-    currentEventSource = null;
+  if (currentAbortController) {
+    currentAbortController.abort();
   }
+  currentAbortController = new AbortController();
 
   runBtn.disabled = true;
   resultCard.style.display = 'none';
   setStatus('正在分析中...', '');
   resetProgress();
 
-  const params = new URLSearchParams({
-    project_path: projectPath,
-    request: request,
-    report_dir: reportDir,
-  });
+  try {
+    const resp = await fetch('/api/analyze-stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_path: projectPath,
+        request: request,
+        report_dir: reportDir,
+      }),
+      signal: currentAbortController.signal,
+    });
 
-  const es = new EventSource('/api/analyze-stream?' + params.toString());
-  currentEventSource = es;
+    if (!resp.ok) {
+      const data = await resp.json().catch(() => ({}));
+      throw new Error(data.error || '请求失败');
+    }
 
-  es.addEventListener('progress', (e) => {
-    try {
-      const data = JSON.parse(e.data);
-      const stage = data.stage;
-      if (['selecting', 'resolved', 'skill_start', 'skill_done'].includes(stage)) {
-        updateProgress(stage, data);
-      } else if (stage === 'clone') {
-        addOrUpdateStep('clone', data.message || '正在克隆仓库...', 'running');
-      } else if (stage === 'index') {
-        addOrUpdateStep('index', data.message || '正在构建索引...', 'running');
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      
+      buffer += decoder.decode(value, { stream: true });
+
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop();
+
+      let streamFinished = false;
+      for (const part of parts) {
+        if (handleSSEChunk(part, projectPath, request)) {
+          streamFinished = true;
+          break;
+        }
       }
-    } catch (err) {
-      // ignore
+      
+      if (streamFinished) {
+        await reader.cancel();
+        break;
+      }
     }
-  });
-
-  es.addEventListener('complete', (e) => {
-    es.close();
-    currentEventSource = null;
-    try {
-      const data = JSON.parse(e.data);
-      currentResult = data.result;
-      currentProjectPath = projectPath;
-
-      setStatus('分析完成。', 'success');
-      renderResult(data.result, data.report_path);
-      resultCard.style.display = 'block';
-      saveHistory(request, projectPath, data.result, data.report_path);
-    } catch (err) {
-      setStatus('解析结果失败：' + err.message, 'error');
-    } finally {
-      runBtn.disabled = false;
-      hideProgress();
+  } catch (e) {
+    if (e.name === 'AbortError') {
+      setStatus('分析已取消', 'error');
+    } else {
+      setStatus('请求失败或连接中断：' + e.message, 'error');
     }
-  });
-
-  es.addEventListener('error', (e) => {
-    es.close();
-    currentEventSource = null;
+  } finally {
     runBtn.disabled = false;
-    try {
-      const data = e.data ? JSON.parse(e.data) : {};
-      setStatus('分析失败：' + (data.error || '未知错误'), 'error');
-    } catch (err) {
-      setStatus('分析失败', 'error');
-    }
     hideProgress();
-  });
+    currentAbortController = null;
+  }
+}
 
-  // EventSource 网络错误
-  es.onerror = () => {
-    if (es.readyState === EventSource.CLOSED) return;
-    es.close();
-    currentEventSource = null;
-    runBtn.disabled = false;
-    setStatus('连接中断，请重试', 'error');
-    hideProgress();
-  };
+function handleSSEChunk(chunk, projectPath, request) {
+  if (!chunk.trim()) return false;
+
+  let event = 'message';
+  let data = '';
+
+  for (const line of chunk.split('\n')) {
+    if (line.startsWith('event: ')) {
+      event = line.slice(7).trim();
+    } else if (line.startsWith('data: ')) {
+      data = line.slice(6);
+    }
+  }
+
+  if (!data) return false;
+
+  let parsed;
+  try {
+    parsed = JSON.parse(data);
+  } catch (e) {
+    return false;
+  }
+
+  if (event === 'progress') {
+    const stage = parsed.stage;
+    if (['selecting', 'resolved', 'skill_start', 'skill_done'].includes(stage)) {
+      updateProgress(stage, parsed);
+    } else if (stage === 'clone') {
+      addOrUpdateStep('clone', parsed.message || '正在克隆仓库...', 'running');
+    } else if (stage === 'clone_done') {
+      addOrUpdateStep('clone', '仓库克隆完成', 'done');
+    } else if (stage === 'index') {
+      addOrUpdateStep('index', parsed.message || '正在构建索引...', 'running');
+    } else if (stage === 'index_done') {
+      addOrUpdateStep('index', '索引构建完成', 'done');
+    }
+  } else if (event === 'complete') {
+    currentResult = parsed.result;
+    currentProjectPath = projectPath;
+    setStatus('分析完成。', 'success');
+    renderResult(parsed.result, parsed.report_path);
+    resultCard.style.display = 'block';
+    saveHistory(request, projectPath, parsed.result, parsed.report_path);
+    return true;
+  } else if (event === 'error') {
+    setStatus('分析失败：' + (parsed.error || '未知错误'), 'error');
+    return true;
+  }
+  
+  return false;
 }
 
 function setStatus(msg, type) {
@@ -261,6 +320,18 @@ function setStatus(msg, type) {
 function renderResult(result, reportPath) {
   reportPathEl.textContent = reportPath ? '报告：' + reportPath : '';
   resultContent.innerHTML = '';
+
+  if (result && result.success === false) {
+    if (result.clarification) {
+      clarificationText.textContent = result.clarification;
+      clarificationBox.style.display = 'block';
+    }
+    const pre = document.createElement('pre');
+    pre.className = 'json-view';
+    pre.textContent = JSON.stringify(result, null, 2);
+    resultContent.appendChild(pre);
+    return;
+  }
 
   if (!result || !Array.isArray(result.steps)) {
     renderJSON(result);
@@ -434,45 +505,133 @@ function renderImpactAnalysis(data) {
 }
 
 function renderBusinessRules(data) {
+  const capabilities = data.capabilities || [];
   const rules = data.rules || [];
-  if (rules.length === 0) {
+
+  if (rules.length === 0 && capabilities.length === 0) {
     resultContent.appendChild(emptyState('未抽取到业务规则'));
     return;
   }
 
-  for (const rule of rules) {
-    const item = document.createElement('div');
-    item.className = 'rule-item';
-
-    const id = document.createElement('div');
-    id.className = 'rule-id';
-    id.textContent = rule.id || '';
-
-    const desc = document.createElement('div');
-    desc.className = 'rule-desc';
-    desc.textContent = rule.description || '';
-
-    const meta = document.createElement('div');
-    meta.className = 'rule-meta';
-
-    if (rule.category) {
-      const cat = document.createElement('span');
-      cat.className = 'rule-category';
-      cat.textContent = rule.category;
-      meta.appendChild(cat);
-    }
-    if (rule.code_reference && rule.code_reference.file) {
-      const ref = document.createElement('span');
-      const line = rule.code_reference.line_start || '';
-      ref.textContent = `${rule.code_reference.file}:${line}`;
-      meta.appendChild(ref);
-    }
-
-    item.appendChild(id);
-    item.appendChild(desc);
-    item.appendChild(meta);
-    resultContent.appendChild(item);
+  if (data.stats) {
+    const stats = document.createElement('div');
+    stats.style.marginBottom = '16px';
+    stats.innerHTML = `
+      <span class="badge badge-info">扫描决策点 ${data.stats.candidates_scanned || 0}</span>
+      <span class="badge badge-info" style="margin-left:6px;">抽取规则 ${data.stats.rules_extracted || 0}</span>
+      <span class="badge badge-info" style="margin-left:6px;">业务能力 ${data.stats.capabilities_found || 0}</span>
+    `;
+    resultContent.appendChild(stats);
   }
+
+  const ctx = data.business_context;
+  if (ctx && (ctx.configs?.length > 0 || ctx.sql_enums?.length > 0 || ctx.sql_constraints?.length > 0)) {
+    const ctxBox = document.createElement('details');
+    ctxBox.style.cssText = 'margin-bottom:16px;padding:12px 16px;background:#f8fafc;border-radius:8px;border:1px solid #e2e8f0;';
+    const cfgCount = ctx.configs?.length || 0;
+    const enumCount = ctx.sql_enums?.length || 0;
+    const consCount = ctx.sql_constraints?.length || 0;
+    ctxBox.innerHTML = `
+      <summary style="cursor:pointer;font-size:13px;color:#64748b;">
+        业务上下文：配置项 ${cfgCount} · 枚举 ${enumCount} · 约束 ${consCount}
+      </summary>
+    `;
+    const ctxBody = document.createElement('div');
+    ctxBody.style.cssText = 'margin-top:10px;font-size:12px;font-family:"SF Mono",Consolas,monospace;color:#64748b;max-height:200px;overflow-y:auto;';
+    if (ctx.configs && ctx.configs.length > 0) {
+      const cfgList = document.createElement('div');
+      cfgList.innerHTML = '<strong style="color:#1e293b;">配置项</strong>';
+      ctx.configs.slice(0, 15).forEach(c => {
+        const line = document.createElement('div');
+        line.textContent = `${c.file}:${c.line}  ${c.content}`;
+        line.style.marginTop = '2px';
+        cfgList.appendChild(line);
+      });
+      ctxBody.appendChild(cfgList);
+    }
+    if (ctx.sql_enums && ctx.sql_enums.length > 0) {
+      const enumList = document.createElement('div');
+      enumList.style.marginTop = '8px';
+      enumList.innerHTML = '<strong style="color:#1e293b;">SQL 枚举</strong>';
+      ctx.sql_enums.slice(0, 10).forEach(e => {
+        const line = document.createElement('div');
+        line.textContent = `${e.file}  ${(e.values || []).join(', ')}`;
+        line.style.marginTop = '2px';
+        enumList.appendChild(line);
+      });
+      ctxBody.appendChild(enumList);
+    }
+    if (ctx.sql_constraints && ctx.sql_constraints.length > 0) {
+      const consList = document.createElement('div');
+      consList.style.marginTop = '8px';
+      consList.innerHTML = '<strong style="color:#1e293b;">SQL 约束</strong>';
+      ctx.sql_constraints.slice(0, 10).forEach(c => {
+        const line = document.createElement('div');
+        line.textContent = `${c.file}  ${c.constraint}`;
+        line.style.marginTop = '2px';
+        consList.appendChild(line);
+      });
+      ctxBody.appendChild(consList);
+    }
+    ctxBox.appendChild(ctxBody);
+    resultContent.appendChild(ctxBox);
+  }
+
+  if (capabilities.length > 0) {
+    capabilities.forEach(cap => {
+      const section = document.createElement('div');
+      section.style.cssText = 'margin-bottom:24px;';
+
+      const header = document.createElement('div');
+      header.style.cssText = 'display:flex;align-items:center;gap:10px;margin-bottom:12px;padding-bottom:8px;border-bottom:2px solid #eef2ff;';
+      header.innerHTML = `
+        <strong style="font-size:15px;color:#4f46e5;">${escapeHtml(cap.name)}</strong>
+        <span class="badge badge-info">${cap.rule_count} 条规则</span>
+      `;
+      section.appendChild(header);
+
+      for (const rule of (cap.rules || [])) {
+        section.appendChild(buildRuleCard(rule));
+      }
+      resultContent.appendChild(section);
+    });
+  } else {
+    rules.forEach(rule => resultContent.appendChild(buildRuleCard(rule)));
+  }
+}
+
+function buildRuleCard(rule) {
+  const item = document.createElement('div');
+  item.className = 'rule-item';
+
+  const id = document.createElement('div');
+  id.className = 'rule-id';
+  id.textContent = rule.id || '';
+
+  const desc = document.createElement('div');
+  desc.className = 'rule-desc';
+  desc.textContent = rule.description || '';
+
+  const meta = document.createElement('div');
+  meta.className = 'rule-meta';
+
+  if (rule.category) {
+    const cat = document.createElement('span');
+    cat.className = 'rule-category';
+    cat.textContent = rule.category;
+    meta.appendChild(cat);
+  }
+  if (rule.code_reference && rule.code_reference.file) {
+    const ref = document.createElement('span');
+    const line = rule.code_reference.line_start || '';
+    ref.textContent = `${rule.code_reference.file}:${line}`;
+    meta.appendChild(ref);
+  }
+
+  item.appendChild(id);
+  item.appendChild(desc);
+  item.appendChild(meta);
+  return item;
 }
 
 function renderDeadCode(data) {
@@ -647,7 +806,6 @@ function saveHistory(request, projectPath, result, reportPath) {
   try {
     localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
   } catch (e) {
-    // localStorage 满了，丢弃最早的
     history = history.slice(0, 3);
     try { localStorage.setItem(HISTORY_KEY, JSON.stringify(history)); } catch (_) {}
   }
@@ -817,26 +975,41 @@ const SKILL_TO_MARKDOWN = {
 
   "business-rule-extraction": (data) => {
     const out = ['## 业务规则', ''];
+    const capabilities = data.capabilities || [];
     const rules = data.rules || [];
+
     if (rules.length === 0) {
       out.push('未抽取到业务规则。');
       return out.join('\n');
     }
-    for (const rule of rules) {
-      out.push(`### ${rule.id || ''}`);
+
+    if (data.stats) {
+      out.push(`扫描决策点 ${data.stats.candidates_scanned || 0} 个，抽取规则 ${data.stats.rules_extracted || 0} 条，识别业务能力 ${data.stats.capabilities_found || 0} 个。`);
       out.push('');
-      out.push(rule.description || '');
-      const parts = [];
-      if (rule.category) parts.push(`分类：${rule.category}`);
-      if (rule.code_reference && rule.code_reference.file) {
-        const line = rule.code_reference.line_start || '';
-        parts.push(`位置：\`${rule.code_reference.file}:${line}\``);
-      }
-      if (parts.length > 0) {
+    }
+
+    if (capabilities.length > 0) {
+      for (const cap of capabilities) {
+        out.push(`### ${cap.name}（${cap.rule_count} 条）`);
         out.push('');
-        out.push(parts.join(' · '));
+        for (const rule of (cap.rules || [])) {
+          out.push(`- **${rule.id || ''}** ${rule.description || ''}`);
+          if (rule.category) out.push(`  - 分类：${rule.category}`);
+          if (rule.code_reference && rule.code_reference.file) {
+            const line = rule.code_reference.line_start || '';
+            out.push(`  - 位置：\`${rule.code_reference.file}:${line}\``);
+          }
+        }
+        out.push('');
       }
-      out.push('');
+    } else {
+      for (const rule of rules) {
+        out.push(`- **${rule.id || ''}** ${rule.description || ''}`);
+        if (rule.code_reference && rule.code_reference.file) {
+          const line = rule.code_reference.line_start || '';
+          out.push(`  - 位置：\`${rule.code_reference.file}:${line}\``);
+        }
+      }
     }
     return out.join('\n');
   },

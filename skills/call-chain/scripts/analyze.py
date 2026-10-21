@@ -10,8 +10,6 @@ from agent.codegraph_client import CodeGraphClient
 
 
 def extract_symbol(request: str) -> str:
-    """从用户请求中提取符号名。简单实现，将来可升级为 LLM 抽取。"""
-    # 尝试匹配：调用链/调用者/callers of XXX
     patterns = [
         r"调用链\s*[:：]?\s*(\S+)",
         r"调用者\s*[:：]?\s*(\S+)",
@@ -21,22 +19,23 @@ def extract_symbol(request: str) -> str:
         m = re.search(p, request, re.IGNORECASE)
         if m:
             return m.group(1).strip()
-    # fallback: 取最后一个看起来像标识符的 token
     tokens = re.findall(r"[A-Za-z_][A-Za-z0-9_.]*", request)
     return tokens[-1] if tokens else ""
 
 
 def main():
     payload = json.loads(sys.stdin.read())
-    project_path = payload["input"]["project_path"]
-    user_request = payload["input"].get("user_request", "")
+    input_data = payload["input"]
+    project_path = input_data["project_path"]
+    user_request = input_data.get("user_request", "")
+    params = input_data.get("params", {}) or {}
 
-    symbol = extract_symbol(user_request)
+    symbol = params.get("symbol") or extract_symbol(user_request)
+
     if not symbol:
         print(json.dumps({
             "status": "error",
-            "error": "could not extract symbol name from request",
-            "hint": "try: '分析 AuthService.login 的调用链'",
+            "error": "could not determine target symbol. Try: '分析 create_task 的调用链'",
         }, ensure_ascii=False))
         return
 
