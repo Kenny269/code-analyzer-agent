@@ -149,6 +149,38 @@ main {
   color: var(--text-light);
 }
 
+/* ---- 场景按钮 & Chips ---- */
+
+.scenarios {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.scenario-btn {
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.2s;
+}
+
+.scenario-btn:hover {
+  background: #eef2ff;
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.scenario-btn .icon {
+  font-size: 16px;
+}
+
 .chips {
   display: flex;
   flex-wrap: wrap;
@@ -171,6 +203,8 @@ main {
 .chip:hover {
   background: #ddd6fe;
 }
+
+/* ---- 高级选项 ---- */
 
 .advanced {
   margin-bottom: 20px;
@@ -208,6 +242,8 @@ main {
   margin-top: 16px;
   margin-bottom: 0;
 }
+
+/* ---- 按钮 ---- */
 
 button {
   font-family: inherit;
@@ -268,6 +304,8 @@ button {
 }
 
 .btn-text:hover { color: var(--error); }
+
+/* ---- 状态与进度 ---- */
 
 .status {
   margin-top: 16px;
@@ -354,6 +392,8 @@ button {
   50% { transform: scale(1.15); opacity: 0.7; }
 }
 
+/* ---- 结果区 ---- */
+
 .result-header {
   display: flex;
   justify-content: space-between;
@@ -404,6 +444,8 @@ button {
   font-size: 13px;
 }
 
+/* ---- 业务规则卡片 ---- */
+
 .rule-item {
   padding: 14px 16px;
   border-left: 3px solid var(--primary);
@@ -442,6 +484,8 @@ button {
   margin-right: 8px;
 }
 
+/* ---- 表格 ---- */
+
 .data-table {
   width: 100%;
   border-collapse: collapse;
@@ -473,6 +517,8 @@ button {
   color: var(--primary);
 }
 
+/* ---- 徽章 ---- */
+
 .badge {
   display: inline-block;
   padding: 2px 8px;
@@ -487,6 +533,8 @@ button {
 .badge-info { background: var(--primary-light); color: var(--primary); }
 .badge-success { background: #ecfdf5; color: var(--success); }
 .badge-danger { background: #fef2f2; color: var(--error); }
+
+/* ---- 模块卡片 ---- */
 
 .module-item {
   padding: 12px 16px;
@@ -508,6 +556,8 @@ button {
   color: var(--text-muted);
   margin-top: 4px;
 }
+
+/* ---- 调用链 ---- */
 
 .call-section { margin-bottom: 20px; }
 
@@ -543,6 +593,8 @@ button {
   font-family: "SF Mono", Consolas, monospace;
 }
 
+/* ---- 风险横幅 ---- */
+
 .risk-banner {
   padding: 14px 18px;
   border-radius: 8px;
@@ -554,6 +606,8 @@ button {
 .risk-low { background: #ecfdf5; color: var(--success); }
 .risk-medium { background: #fffbeb; color: var(--warning); }
 .risk-high { background: #fef2f2; color: var(--error); }
+
+/* ---- Markdown 报告 ---- */
 
 .report-body {
   font-size: 14px;
@@ -609,6 +663,8 @@ button {
   margin: 20px 0;
 }
 
+/* ---- 空状态与 JSON ---- */
+
 .empty-state {
   padding: 24px;
   text-align: center;
@@ -628,6 +684,8 @@ pre.json-view {
   max-height: 500px;
   line-height: 1.5;
 }
+
+/* ---- 历史记录 ---- */
 
 .history-item {
   padding: 12px 16px;

@@ -52,6 +52,7 @@ const SKILL_LABELS = {
   "business-flow-reconstruction": "业务流程重建",
   "dead-code-detection": "死代码检测",
   "dependency-cycle-detection": "循环依赖检测",
+  "business-capability-map": "业务能力全景",
   "report-generation": "报告生成",
 };
 
@@ -67,6 +68,15 @@ clearHistoryBtn.addEventListener('click', clearHistory);
 document.querySelectorAll('.chip').forEach(chip => {
   chip.addEventListener('click', () => {
     requestInput.value = chip.dataset.request || '';
+    skillSelect.value = '';
+    onSkillChange();
+    requestInput.focus();
+  });
+});
+
+document.querySelectorAll('.scenario-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    requestInput.value = btn.dataset.request || '';
     skillSelect.value = '';
     onSkillChange();
     requestInput.focus();
@@ -303,7 +313,7 @@ function handleSSEChunk(chunk, projectPath, request) {
     saveHistory(request, projectPath, parsed.result, parsed.report_path);
     return true;
   } else if (event === 'error') {
-    setStatus('分析失败：' + (parsed.error || '未知错误'), 'error');
+    setStatus('分析失败：' + (parsed.error || '服务器内部错误'), 'error');
     return true;
   }
   
@@ -370,6 +380,7 @@ const RENDERERS = {
   "dead-code-detection": renderDeadCode,
   "dependency-cycle-detection": renderDependencyCycles,
   "business-flow-reconstruction": renderBusinessFlows,
+  "business-capability-map": renderCapabilityMap,
   "report-generation": renderReport,
 };
 
@@ -773,6 +784,30 @@ function renderBusinessFlows(data) {
   });
 }
 
+function renderCapabilityMap(data) {
+  const domains = data.domains || [];
+  if (domains.length === 0) {
+    resultContent.appendChild(emptyState('未识别出业务模块'));
+    return;
+  }
+
+  const grid = document.createElement('div');
+  grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill, minmax(280px, 1fr));gap:16px;';
+
+  domains.forEach(d => {
+    const card = document.createElement('div');
+    card.style.cssText = 'padding:16px;border:1px solid #e2e8f0;border-radius:8px;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,0.05);';
+    
+    card.innerHTML = `
+      <div style="font-size:15px;font-weight:600;color:#4f46e5;margin-bottom:8px;">${escapeHtml(d.name || '')}</div>
+      <div style="font-size:13px;color:#64748b;line-height:1.6;">${escapeHtml(d.description || '')}</div>
+    `;
+    grid.appendChild(card);
+  });
+
+  resultContent.appendChild(grid);
+}
+
 function renderReport(data) {
   const markdown = data.report_markdown || '';
   if (!markdown) {
@@ -1115,6 +1150,16 @@ const SKILL_TO_MARKDOWN = {
         out.push(`**业务总结**：${flow.business_summary}`);
         out.push('');
       }
+    }
+    return out.join('\n');
+  },
+
+  "business-capability-map": (data) => {
+    const out = ['## 业务能力全景', ''];
+    for (const d of (data.domains || [])) {
+      out.push(`### ${d.name}`);
+      out.push(d.description || '');
+      out.push('');
     }
     return out.join('\n');
   },

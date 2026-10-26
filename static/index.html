@@ -35,7 +35,20 @@
 · 看看 create_task 被谁调用了
 · 这个项目哪里耦合最严重
 · 帮我梳理订单的完整业务流程"></textarea>
-        <div class="chips" id="exampleChips">
+        
+        <div class="scenarios">
+          <button type="button" class="scenario-btn" data-request="生成系统的业务能力全景图">
+            <span class="icon">📖</span> 一键业务交接
+          </button>
+          <button type="button" class="scenario-btn" data-request="分析项目结构并检测循环依赖和死代码">
+            <span class="icon">🛠️</span> 重构前体检
+          </button>
+          <button type="button" class="scenario-btn" data-request="提取订单、优惠券、积分相关的业务规则">
+            <span class="icon">🎯</span> 提取营销规则
+          </button>
+        </div>
+
+        <div class="chips" id="exampleChips" style="margin-top: 12px;">
           <span class="chip" data-request="提取这个系统的业务规则">抽取业务规则</span>
           <span class="chip" data-request="重建业务流程">重建业务流程</span>
           <span class="chip" data-request="检测循环依赖">检测循环依赖</span>
