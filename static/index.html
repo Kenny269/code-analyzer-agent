@@ -30,11 +30,7 @@
 
       <div class="field">
         <label for="requestInput">你想了解什么？</label>
-        <textarea id="requestInput" rows="3" placeholder="用自然语言描述你的分析目标，例如：
-· 分析优惠券相关的业务规则
-· 看看 create_task 被谁调用了
-· 这个项目哪里耦合最严重
-· 帮我梳理订单的完整业务流程"></textarea>
+        <textarea id="requestInput" rows="2" placeholder="用自然语言描述你的分析目标，例如：分析优惠券相关的业务规则"></textarea>
         
         <div class="scenarios">
           <button type="button" class="scenario-btn" data-request="生成系统的业务能力全景图">
@@ -43,43 +39,38 @@
           <button type="button" class="scenario-btn" data-request="分析项目结构并检测循环依赖和死代码">
             <span class="icon">🛠️</span> 重构前体检
           </button>
-          <button type="button" class="scenario-btn" data-request="提取订单、优惠券、积分相关的业务规则">
-            <span class="icon">🎯</span> 提取营销规则
+          <button type="button" class="scenario-btn" data-request="提取订单、优惠券、积分相关的业务规则，并与我的业务文档进行交叉验证">
+            <span class="icon">🎯</span> 业务审计与交叉验证
           </button>
-        </div>
-
-        <div class="chips" id="exampleChips" style="margin-top: 12px;">
-          <span class="chip" data-request="提取这个系统的业务规则">抽取业务规则</span>
-          <span class="chip" data-request="重建业务流程">重建业务流程</span>
-          <span class="chip" data-request="检测循环依赖">检测循环依赖</span>
-          <span class="chip" data-request="分析项目结构">项目结构分析</span>
-          <span class="chip" data-request="检测死代码">检测死代码</span>
         </div>
       </div>
 
-      <details class="advanced">
-        <summary>高级选项</summary>
+      <details class="advanced" open>
+        <summary>业务上下文输入（可选，用于交叉验证）</summary>
+        <div class="field" style="margin-top: 12px;">
+          <textarea id="businessDocInput" rows="4" placeholder="粘贴旧版需求文档、专家访谈记录或 PRD。AI 将对比代码提取的规则与文档描述，找出冲突、缺失或隐藏逻辑。"></textarea>
+        </div>
+      </details>
 
+      <details class="advanced">
+        <summary>高级执行选项</summary>
         <div class="field">
           <label for="skillSelect">精确模式：指定技能</label>
           <select id="skillSelect">
             <option value="">（使用上方自然语言输入）</option>
-            <option value="分析项目结构">分析项目结构</option>
             <option value="提取这个系统的业务规则">抽取业务规则</option>
             <option value="重建业务流程">重建业务流程</option>
-            <option value="检测死代码">检测死代码</option>
+            <option value="生成系统的业务能力全景图">业务能力全景</option>
             <option value="检测循环依赖">检测循环依赖</option>
+            <option value="检测死代码">检测死代码</option>
             <option value="call-chain">分析调用链</option>
             <option value="impact-analysis">分析修改影响</option>
-            <option value="生成一份项目报告">生成完整项目报告</option>
           </select>
         </div>
-
         <div class="field" id="symbolField" style="display:none;">
           <label for="symbolInput">目标符号名</label>
           <input type="text" id="symbolInput" placeholder="例如 create_task">
         </div>
-
         <div class="field">
           <label for="reportDir">报告保存位置</label>
           <div class="input-group">

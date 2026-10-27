@@ -6,6 +6,7 @@ const reportPathEl = document.getElementById('reportPath');
 const skillBadge = document.getElementById('skillBadge');
 const projectPathInput = document.getElementById('projectPath');
 const requestInput = document.getElementById('requestInput');
+const businessDocInput = document.getElementById('businessDocInput');
 const skillSelect = document.getElementById('skillSelect');
 const symbolField = document.getElementById('symbolField');
 const symbolInput = document.getElementById('symbolInput');
@@ -26,34 +27,22 @@ const HISTORY_KEY = 'code_analyzer_history';
 const MAX_HISTORY = 10;
 
 const SKILL_CONFIG = {
-  "分析项目结构": { needsSymbol: false },
   "提取这个系统的业务规则": { needsSymbol: false },
-  "重建业务流程": { needsSymbol: false },
-  "检测死代码": { needsSymbol: false },
-  "检测循环依赖": { needsSymbol: false },
-  "call-chain": {
-    needsSymbol: true,
-    template: "分析 {symbol} 的调用链",
-    placeholder: "例如 create_task"
-  },
-  "impact-analysis": {
-    needsSymbol: true,
-    template: "改动 {symbol} 的影响",
-    placeholder: "例如 create_task"
-  },
-  "生成一份项目报告": { needsSymbol: false },
+  "生成系统的业务能力全景图": { needsSymbol: false },
+  "call-chain": { needsSymbol: true, template: "分析 {symbol} 的调用链", placeholder: "例如 create_task" },
+  "impact-analysis": { needsSymbol: true, template: "改动 {symbol} 的影响", placeholder: "例如 create_task" },
 };
 
 const SKILL_LABELS = {
-  "project-structure": "项目结构分析",
-  "call-chain": "调用链分析",
+  "project-structure": "项目结构",
+  "call-chain": "调用链",
   "impact-analysis": "影响分析",
-  "business-rule-extraction": "业务规则抽取",
-  "business-flow-reconstruction": "业务流程重建",
-  "dead-code-detection": "死代码检测",
-  "dependency-cycle-detection": "循环依赖检测",
-  "business-capability-map": "业务能力全景",
-  "report-generation": "报告生成",
+  "business-rule-extraction": "业务规则审计",
+  "business-flow-reconstruction": "业务流程",
+  "dead-code-detection": "死代码",
+  "dependency-cycle-detection": "循环依赖",
+  "business-capability-map": "业务全景",
+  "report-generation": "报告",
 };
 
 // ---- 初始化 ----
@@ -68,18 +57,14 @@ clearHistoryBtn.addEventListener('click', clearHistory);
 document.querySelectorAll('.chip').forEach(chip => {
   chip.addEventListener('click', () => {
     requestInput.value = chip.dataset.request || '';
-    skillSelect.value = '';
     onSkillChange();
-    requestInput.focus();
   });
 });
 
 document.querySelectorAll('.scenario-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     requestInput.value = btn.dataset.request || '';
-    skillSelect.value = '';
     onSkillChange();
-    requestInput.focus();
   });
 });
 
@@ -104,35 +89,24 @@ async function chooseFolder(targetInput) {
   try {
     const resp = await fetch('/api/choose-folder');
     const data = await resp.json();
-    if (data.path) {
-      targetInput.value = data.path;
-    } else if (data.error) {
-      setStatus('选择文件夹失败：' + data.error, 'error');
-    }
-  } catch (e) {
-    setStatus('请求失败：' + e.message, 'error');
-  }
+    if (data.path) targetInput.value = data.path;
+    else if (data.error) setStatus('选择文件夹失败：' + data.error, 'error');
+  } catch (e) { setStatus('请求失败：' + e.message, 'error'); }
 }
 
 function buildRequest() {
   const preset = skillSelect.value;
-
   if (preset) {
     const config = SKILL_CONFIG[preset];
     if (config && config.needsSymbol) {
       const symbol = symbolInput.value.trim();
-      if (!symbol) {
-        return { error: '精确模式下请填写目标符号名' };
-      }
+      if (!symbol) return { error: '请填写目标符号名' };
       return { request: config.template.replace('{symbol}', symbol) };
     }
     return { request: preset };
   }
-
   const free = requestInput.value.trim();
-  if (!free) {
-    return { error: '请描述你想了解什么，或从快捷示例里选一个' };
-  }
+  if (!free) return { error: '请描述你想了解什么' };
   return { request: free };
 }
 
@@ -144,11 +118,7 @@ function resetProgress() {
   clarificationBox.style.display = 'none';
 }
 
-function hideProgress() {
-  setTimeout(() => {
-    progressContainer.style.display = 'none';
-  }, 1200);
-}
+function hideProgress() { setTimeout(() => { progressContainer.style.display = 'none'; }, 1200); }
 
 function addOrUpdateStep(key, label, state) {
   let el = progressSteps.querySelector(`[data-key="${key}"]`);
@@ -166,22 +136,15 @@ function addOrUpdateStep(key, label, state) {
 
 function updateProgress(event, data) {
   if (event === 'selecting') {
-    addOrUpdateStep('selecting', data.message || '正在理解你的需求...', 'running');
+    addOrUpdateStep('selecting', data.message || '正在理解...', 'running');
   } else if (event === 'resolved') {
     addOrUpdateStep('selecting', '需求理解完成', 'done');
-    const executed = data.executed || [];
-    executed.forEach((skillName) => {
-      addOrUpdateStep('skill-' + skillName,
-        `执行 ${SKILL_LABELS[skillName] || skillName}`, '');
-    });
+    (data.executed || []).forEach((s) => addOrUpdateStep('skill-' + s, `执行 ${SKILL_LABELS[s] || s}`, ''));
   } else if (event === 'skill_start') {
-    const label = SKILL_LABELS[data.skill] || data.skill;
-    addOrUpdateStep('skill-' + data.skill, `正在执行 ${label}...`, 'running');
+    addOrUpdateStep('skill-' + data.skill, `正在执行 ${SKILL_LABELS[data.skill] || data.skill}...`, 'running');
   } else if (event === 'skill_done') {
-    const label = SKILL_LABELS[data.skill] || data.skill;
     const state = data.status === 'success' ? 'done' : 'error';
-    addOrUpdateStep('skill-' + data.skill,
-      `${label} ${state === 'done' ? '完成' : '失败'}`, state);
+    addOrUpdateStep('skill-' + data.skill, `${SKILL_LABELS[data.skill] || data.skill} ${state === 'done' ? '完成' : '失败'}`, state);
   }
 }
 
@@ -190,21 +153,13 @@ function updateProgress(event, data) {
 async function runAnalysis() {
   const projectPath = projectPathInput.value.trim();
   const reportDir = reportDirInput.value.trim();
+  const businessDoc = businessDocInput.value.trim();
 
-  if (!projectPath) {
-    setStatus('请先选择项目文件夹或填写 Git URL', 'error');
-    return;
-  }
-
+  if (!projectPath) return setStatus('请先选择项目路径', 'error');
   const { request, error } = buildRequest();
-  if (error) {
-    setStatus(error, 'error');
-    return;
-  }
+  if (error) return setStatus(error, 'error');
 
-  if (currentAbortController) {
-    currentAbortController.abort();
-  }
+  if (currentAbortController) currentAbortController.abort();
   currentAbortController = new AbortController();
 
   runBtn.disabled = true;
@@ -216,10 +171,11 @@ async function runAnalysis() {
     const resp = await fetch('/api/analyze-stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        project_path: projectPath,
-        request: request,
+      body: JSON.stringify({ 
+        project_path: projectPath, 
+        request: request, 
         report_dir: reportDir,
+        business_doc: businessDoc
       }),
       signal: currentAbortController.signal,
     });
@@ -236,31 +192,25 @@ async function runAnalysis() {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      
       buffer += decoder.decode(value, { stream: true });
-
       const parts = buffer.split('\n\n');
       buffer = parts.pop();
 
       let streamFinished = false;
       for (const part of parts) {
-        if (handleSSEChunk(part, projectPath, request)) {
+        if (handleSSEChunk(part, projectPath, request, businessDoc)) {
           streamFinished = true;
           break;
         }
       }
-      
       if (streamFinished) {
         await reader.cancel();
         break;
       }
     }
   } catch (e) {
-    if (e.name === 'AbortError') {
-      setStatus('分析已取消', 'error');
-    } else {
-      setStatus('请求失败或连接中断：' + e.message, 'error');
-    }
+    if (e.name === 'AbortError') setStatus('已取消', 'error');
+    else setStatus('请求失败：' + e.message, 'error');
   } finally {
     runBtn.disabled = false;
     hideProgress();
@@ -268,42 +218,24 @@ async function runAnalysis() {
   }
 }
 
-function handleSSEChunk(chunk, projectPath, request) {
+function handleSSEChunk(chunk, projectPath, request, businessDoc) {
   if (!chunk.trim()) return false;
-
-  let event = 'message';
-  let data = '';
-
+  let event = 'message', data = '';
   for (const line of chunk.split('\n')) {
-    if (line.startsWith('event: ')) {
-      event = line.slice(7).trim();
-    } else if (line.startsWith('data: ')) {
-      data = line.slice(6);
-    }
+    if (line.startsWith('event: ')) event = line.slice(7).trim();
+    else if (line.startsWith('data: ')) data = line.slice(6);
   }
-
   if (!data) return false;
-
   let parsed;
-  try {
-    parsed = JSON.parse(data);
-  } catch (e) {
-    return false;
-  }
+  try { parsed = JSON.parse(data); } catch (e) { return false; }
 
   if (event === 'progress') {
     const stage = parsed.stage;
-    if (['selecting', 'resolved', 'skill_start', 'skill_done'].includes(stage)) {
-      updateProgress(stage, parsed);
-    } else if (stage === 'clone') {
-      addOrUpdateStep('clone', parsed.message || '正在克隆仓库...', 'running');
-    } else if (stage === 'clone_done') {
-      addOrUpdateStep('clone', '仓库克隆完成', 'done');
-    } else if (stage === 'index') {
-      addOrUpdateStep('index', parsed.message || '正在构建索引...', 'running');
-    } else if (stage === 'index_done') {
-      addOrUpdateStep('index', '索引构建完成', 'done');
-    }
+    if (['selecting', 'resolved', 'skill_start', 'skill_done'].includes(stage)) updateProgress(stage, parsed);
+    else if (stage === 'clone') addOrUpdateStep('clone', parsed.message, 'running');
+    else if (stage === 'clone_done') addOrUpdateStep('clone', '克隆完成', 'done');
+    else if (stage === 'index') addOrUpdateStep('index', parsed.message, 'running');
+    else if (stage === 'index_done') addOrUpdateStep('index', '索引完成', 'done');
   } else if (event === 'complete') {
     currentResult = parsed.result;
     currentProjectPath = projectPath;
@@ -313,10 +245,9 @@ function handleSSEChunk(chunk, projectPath, request) {
     saveHistory(request, projectPath, parsed.result, parsed.report_path);
     return true;
   } else if (event === 'error') {
-    setStatus('分析失败：' + (parsed.error || '服务器内部错误'), 'error');
+    setStatus('分析失败：' + (parsed.error || '未知错误'), 'error');
     return true;
   }
-  
   return false;
 }
 
@@ -330,38 +261,22 @@ function setStatus(msg, type) {
 function renderResult(result, reportPath) {
   reportPathEl.textContent = reportPath ? '报告：' + reportPath : '';
   resultContent.innerHTML = '';
-
   if (result && result.success === false) {
-    if (result.clarification) {
-      clarificationText.textContent = result.clarification;
-      clarificationBox.style.display = 'block';
-    }
-    const pre = document.createElement('pre');
-    pre.className = 'json-view';
-    pre.textContent = JSON.stringify(result, null, 2);
-    resultContent.appendChild(pre);
-    return;
+    if (result.clarification) { clarificationText.textContent = result.clarification; clarificationBox.style.display = 'block'; }
+    const pre = document.createElement('pre'); pre.className = 'json-view'; pre.textContent = JSON.stringify(result, null, 2);
+    resultContent.appendChild(pre); return;
   }
-
-  if (!result || !Array.isArray(result.steps)) {
-    renderJSON(result);
-    return;
-  }
+  if (!result || !Array.isArray(result.steps)) return renderJSON(result);
 
   const skills = result.steps.map(s => s.skill);
   skillBadge.textContent = skills.map(s => SKILL_LABELS[s] || s).join(' → ');
 
   for (const step of result.steps) {
-    const skillName = step.skill;
     const data = step.result && step.result.data;
     if (!data) continue;
-
-    const renderer = RENDERERS[skillName];
-    if (renderer) {
-      renderer(data);
-    } else {
-      renderJSON(data);
-    }
+    const renderer = RENDERERS[step.skill];
+    if (renderer) renderer(data);
+    else renderJSON(data);
   }
 }
 
@@ -384,61 +299,107 @@ const RENDERERS = {
   "report-generation": renderReport,
 };
 
-function renderProjectStructure(data) {
-  if (!data.modules || data.modules.length === 0) {
-    resultContent.appendChild(emptyState('未发现任何模块'));
-    return;
+function renderBusinessRules(data) {
+  const capabilities = data.capabilities || [];
+  const rules = data.rules || [];
+  if (rules.length === 0 && capabilities.length === 0) return resultContent.appendChild(emptyState('未抽取到业务规则'));
+
+  if (data.stats) {
+    const stats = document.createElement('div');
+    stats.style.marginBottom = '16px';
+    stats.innerHTML = `
+      <span class="badge badge-info">扫描决策点 ${data.stats.candidates_scanned || 0}</span>
+      <span class="badge badge-info" style="margin-left:6px;">抽取规则 ${data.stats.rules_extracted || 0}</span>
+    `;
+    resultContent.appendChild(stats);
   }
 
+  if (capabilities.length > 0) {
+    capabilities.forEach(cap => {
+      const section = document.createElement('div');
+      section.style.cssText = 'margin-bottom:24px;';
+      section.innerHTML = `<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;padding-bottom:8px;border-bottom:2px solid #eef2ff;">
+        <strong style="font-size:15px;color:#4f46e5;">${escapeHtml(cap.name)}</strong>
+        <span class="badge badge-info">${cap.rule_count} 条</span>
+      </div>`;
+      for (const rule of (cap.rules || [])) section.appendChild(buildRuleCard(rule));
+      resultContent.appendChild(section);
+    });
+  } else {
+    rules.forEach(rule => resultContent.appendChild(buildRuleCard(rule)));
+  }
+}
+
+function buildRuleCard(rule) {
+  const item = document.createElement('div');
+  item.className = 'rule-item';
+
+  if (rule.status) {
+    const statusMap = { consistent: '一致', conflict: '冲突', missing: '文档缺失', hidden: '代码隐藏' };
+    const tag = document.createElement('span');
+    tag.className = `status-tag ${rule.status}`;
+    tag.textContent = statusMap[rule.status] || rule.status;
+    item.appendChild(tag);
+  }
+
+  const desc = document.createElement('div');
+  desc.className = 'rule-desc';
+  desc.textContent = rule.description || '';
+
+  if (rule.explanation) {
+    const exp = document.createElement('div');
+    exp.className = 'explanation-text';
+    exp.textContent = rule.explanation;
+    item.appendChild(exp);
+  }
+
+  const meta = document.createElement('div');
+  meta.className = 'rule-meta';
+  if (rule.category) {
+    const cat = document.createElement('span');
+    cat.className = 'rule-category';
+    cat.textContent = rule.category;
+    meta.appendChild(cat);
+  }
+  if (rule.code_reference && rule.code_reference.file) {
+    const ref = document.createElement('span');
+    ref.textContent = `${rule.code_reference.file}:${rule.code_reference.line_start || ''}`;
+    meta.appendChild(ref);
+  }
+
+  item.appendChild(desc);
+  item.appendChild(meta);
+  return item;
+}
+
+function renderProjectStructure(data) {
+  if (!data.modules || data.modules.length === 0) return resultContent.appendChild(emptyState('未发现任何模块'));
   const info = document.createElement('div');
   info.style.marginBottom = '16px';
-  info.innerHTML = `
-    <span class="badge badge-info">共 ${data.total_files || 0} 个文件</span>
-    <span class="badge badge-info" style="margin-left: 6px;">构建系统：${data.build_system || 'unknown'}</span>
-  `;
+  info.innerHTML = `<span class="badge badge-info">共 ${data.total_files || 0} 个文件</span>
+    <span class="badge badge-info" style="margin-left: 6px;">构建系统：${data.build_system || 'unknown'}</span>`;
   resultContent.appendChild(info);
 
   for (const mod of data.modules) {
     const item = document.createElement('div');
     item.className = 'module-item';
-
-    const name = document.createElement('div');
-    name.className = 'module-name';
-    name.textContent = mod.name;
-
-    const meta = document.createElement('div');
-    meta.className = 'module-meta';
-    meta.textContent = `${mod.file_count} 个文件`;
-
-    item.appendChild(name);
-    item.appendChild(meta);
-
+    item.innerHTML = `<div class="module-name">${escapeHtml(mod.name)}</div><div class="module-meta">${mod.file_count} 个文件</div>`;
     if (mod.files && mod.files.length > 0) {
-      const fileList = document.createElement('div');
-      fileList.style.marginTop = '8px';
-      fileList.style.fontSize = '12px';
-      fileList.style.color = '#64748b';
-      fileList.style.fontFamily = '"SF Mono", Consolas, monospace';
-      const shown = mod.files.slice(0, 10);
-      fileList.textContent = shown.join(' · ');
-      if (mod.files.length > 10) {
-        fileList.textContent += ` … 等 ${mod.files.length} 个`;
-      }
-      item.appendChild(fileList);
+      const fl = document.createElement('div');
+      fl.style.cssText = 'margin-top:8px;font-size:12px;color:#64748b;font-family:monospace;';
+      fl.textContent = mod.files.slice(0, 10).join(' · ') + (mod.files.length > 10 ? ` … 等 ${mod.files.length} 个` : '');
+      item.appendChild(fl);
     }
-
     resultContent.appendChild(item);
   }
 }
 
 function renderCallChain(data) {
   if (!data) return;
-
   const target = document.createElement('div');
   target.style.marginBottom = '16px';
   target.innerHTML = `<span class="badge badge-info">目标：${escapeHtml(data.target || '—')}</span>`;
   resultContent.appendChild(target);
-
   appendCallSection('调用者', data.callers);
   appendCallSection('被调用者', data.callees);
 }
@@ -447,31 +408,16 @@ function appendCallSection(title, list) {
   if (!list) return;
   const items = Array.isArray(list) ? list : (list.callers || list.callees || []);
   if (items.length === 0) return;
-
   const section = document.createElement('div');
   section.className = 'call-section';
-
-  const heading = document.createElement('div');
-  heading.className = 'call-section-title';
-  heading.textContent = `${title} (${items.length})`;
-  section.appendChild(heading);
-
+  section.innerHTML = `<div class="call-section-title">${title} (${items.length})</div>`;
   for (const item of items) {
     const el = document.createElement('div');
     el.className = 'call-item';
-
-    const name = document.createElement('code');
-    name.textContent = item.name || item.symbol || '—';
-
-    const file = document.createElement('span');
-    file.className = 'call-file';
-    file.textContent = `${item.filePath || item.file || ''}${item.startLine ? ':' + item.startLine : ''}`;
-
-    el.appendChild(name);
-    el.appendChild(file);
+    el.innerHTML = `<code>${escapeHtml(item.name || item.symbol || '—')}</code>
+      <span class="call-file">${escapeHtml(item.filePath || item.file || '')}${item.startLine ? ':' + item.startLine : ''}</span>`;
     section.appendChild(el);
   }
-
   resultContent.appendChild(section);
 }
 
@@ -489,160 +435,21 @@ function renderImpactAnalysis(data) {
   resultContent.appendChild(target);
 
   const affected = data.affected || [];
-  if (affected.length === 0) {
-    resultContent.appendChild(emptyState('未发现受影响的符号'));
-    return;
-  }
+  if (affected.length === 0) return resultContent.appendChild(emptyState('未发现受影响的符号'));
 
   const table = document.createElement('table');
   table.className = 'data-table';
-  table.innerHTML = `
-    <thead>
-      <tr><th>符号</th><th>类型</th><th>文件</th></tr>
-    </thead>
-  `;
+  table.innerHTML = `<thead><tr><th>符号</th><th>类型</th><th>文件</th></tr></thead>`;
   const tbody = document.createElement('tbody');
   for (const item of affected) {
     const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td><code>${escapeHtml(item.name || '—')}</code></td>
+    tr.innerHTML = `<td><code>${escapeHtml(item.name || '—')}</code></td>
       <td>${escapeHtml(item.kind || '—')}</td>
-      <td>${escapeHtml(item.filePath || item.file || '—')}${item.startLine ? ':' + item.startLine : ''}</td>
-    `;
+      <td>${escapeHtml(item.filePath || item.file || '—')}${item.startLine ? ':' + item.startLine : ''}</td>`;
     tbody.appendChild(tr);
   }
   table.appendChild(tbody);
   resultContent.appendChild(table);
-}
-
-function renderBusinessRules(data) {
-  const capabilities = data.capabilities || [];
-  const rules = data.rules || [];
-
-  if (rules.length === 0 && capabilities.length === 0) {
-    resultContent.appendChild(emptyState('未抽取到业务规则'));
-    return;
-  }
-
-  if (data.stats) {
-    const stats = document.createElement('div');
-    stats.style.marginBottom = '16px';
-    stats.innerHTML = `
-      <span class="badge badge-info">扫描决策点 ${data.stats.candidates_scanned || 0}</span>
-      <span class="badge badge-info" style="margin-left:6px;">抽取规则 ${data.stats.rules_extracted || 0}</span>
-      <span class="badge badge-info" style="margin-left:6px;">业务能力 ${data.stats.capabilities_found || 0}</span>
-    `;
-    resultContent.appendChild(stats);
-  }
-
-  const ctx = data.business_context;
-  if (ctx && (ctx.configs?.length > 0 || ctx.sql_enums?.length > 0 || ctx.sql_constraints?.length > 0)) {
-    const ctxBox = document.createElement('details');
-    ctxBox.style.cssText = 'margin-bottom:16px;padding:12px 16px;background:#f8fafc;border-radius:8px;border:1px solid #e2e8f0;';
-    const cfgCount = ctx.configs?.length || 0;
-    const enumCount = ctx.sql_enums?.length || 0;
-    const consCount = ctx.sql_constraints?.length || 0;
-    ctxBox.innerHTML = `
-      <summary style="cursor:pointer;font-size:13px;color:#64748b;">
-        业务上下文：配置项 ${cfgCount} · 枚举 ${enumCount} · 约束 ${consCount}
-      </summary>
-    `;
-    const ctxBody = document.createElement('div');
-    ctxBody.style.cssText = 'margin-top:10px;font-size:12px;font-family:"SF Mono",Consolas,monospace;color:#64748b;max-height:200px;overflow-y:auto;';
-    if (ctx.configs && ctx.configs.length > 0) {
-      const cfgList = document.createElement('div');
-      cfgList.innerHTML = '<strong style="color:#1e293b;">配置项</strong>';
-      ctx.configs.slice(0, 15).forEach(c => {
-        const line = document.createElement('div');
-        line.textContent = `${c.file}:${c.line}  ${c.content}`;
-        line.style.marginTop = '2px';
-        cfgList.appendChild(line);
-      });
-      ctxBody.appendChild(cfgList);
-    }
-    if (ctx.sql_enums && ctx.sql_enums.length > 0) {
-      const enumList = document.createElement('div');
-      enumList.style.marginTop = '8px';
-      enumList.innerHTML = '<strong style="color:#1e293b;">SQL 枚举</strong>';
-      ctx.sql_enums.slice(0, 10).forEach(e => {
-        const line = document.createElement('div');
-        line.textContent = `${e.file}  ${(e.values || []).join(', ')}`;
-        line.style.marginTop = '2px';
-        enumList.appendChild(line);
-      });
-      ctxBody.appendChild(enumList);
-    }
-    if (ctx.sql_constraints && ctx.sql_constraints.length > 0) {
-      const consList = document.createElement('div');
-      consList.style.marginTop = '8px';
-      consList.innerHTML = '<strong style="color:#1e293b;">SQL 约束</strong>';
-      ctx.sql_constraints.slice(0, 10).forEach(c => {
-        const line = document.createElement('div');
-        line.textContent = `${c.file}  ${c.constraint}`;
-        line.style.marginTop = '2px';
-        consList.appendChild(line);
-      });
-      ctxBody.appendChild(consList);
-    }
-    ctxBox.appendChild(ctxBody);
-    resultContent.appendChild(ctxBox);
-  }
-
-  if (capabilities.length > 0) {
-    capabilities.forEach(cap => {
-      const section = document.createElement('div');
-      section.style.cssText = 'margin-bottom:24px;';
-
-      const header = document.createElement('div');
-      header.style.cssText = 'display:flex;align-items:center;gap:10px;margin-bottom:12px;padding-bottom:8px;border-bottom:2px solid #eef2ff;';
-      header.innerHTML = `
-        <strong style="font-size:15px;color:#4f46e5;">${escapeHtml(cap.name)}</strong>
-        <span class="badge badge-info">${cap.rule_count} 条规则</span>
-      `;
-      section.appendChild(header);
-
-      for (const rule of (cap.rules || [])) {
-        section.appendChild(buildRuleCard(rule));
-      }
-      resultContent.appendChild(section);
-    });
-  } else {
-    rules.forEach(rule => resultContent.appendChild(buildRuleCard(rule)));
-  }
-}
-
-function buildRuleCard(rule) {
-  const item = document.createElement('div');
-  item.className = 'rule-item';
-
-  const id = document.createElement('div');
-  id.className = 'rule-id';
-  id.textContent = rule.id || '';
-
-  const desc = document.createElement('div');
-  desc.className = 'rule-desc';
-  desc.textContent = rule.description || '';
-
-  const meta = document.createElement('div');
-  meta.className = 'rule-meta';
-
-  if (rule.category) {
-    const cat = document.createElement('span');
-    cat.className = 'rule-category';
-    cat.textContent = rule.category;
-    meta.appendChild(cat);
-  }
-  if (rule.code_reference && rule.code_reference.file) {
-    const ref = document.createElement('span');
-    const line = rule.code_reference.line_start || '';
-    ref.textContent = `${rule.code_reference.file}:${line}`;
-    meta.appendChild(ref);
-  }
-
-  item.appendChild(id);
-  item.appendChild(desc);
-  item.appendChild(meta);
-  return item;
 }
 
 function renderDeadCode(data) {
@@ -654,37 +461,26 @@ function renderDeadCode(data) {
   const counts = data.confidence_counts || {};
   const summary = document.createElement('div');
   summary.style.marginBottom = '16px';
-  summary.innerHTML = `
-    <span class="badge badge-high">高置信度 ${counts.high || 0}</span>
+  summary.innerHTML = `<span class="badge badge-high">高置信度 ${counts.high || 0}</span>
     <span class="badge badge-medium" style="margin-left:6px;">中置信度 ${counts.medium || 0}</span>
-    <span class="badge badge-low" style="margin-left:6px;">低置信度 ${counts.low || 0}</span>
-  `;
+    <span class="badge badge-low" style="margin-left:6px;">低置信度 ${counts.low || 0}</span>`;
   resultContent.appendChild(summary);
 
   const symbols = data.dead_symbols || [];
-  if (symbols.length === 0) {
-    resultContent.appendChild(emptyState('未发现疑似死代码'));
-    return;
-  }
+  if (symbols.length === 0) return resultContent.appendChild(emptyState('未发现疑似死代码'));
 
   const table = document.createElement('table');
   table.className = 'data-table';
-  table.innerHTML = `
-    <thead>
-      <tr><th>符号</th><th>类型</th><th>位置</th><th>置信度</th><th>复核建议</th></tr>
-    </thead>
-  `;
+  table.innerHTML = `<thead><tr><th>符号</th><th>类型</th><th>位置</th><th>置信度</th><th>复核建议</th></tr></thead>`;
   const tbody = document.createElement('tbody');
   for (const s of symbols) {
     const tr = document.createElement('tr');
     const conf = s.confidence || 'low';
-    tr.innerHTML = `
-      <td><code>${escapeHtml(s.name || '')}</code></td>
+    tr.innerHTML = `<td><code>${escapeHtml(s.name || '')}</code></td>
       <td>${escapeHtml(s.kind || '')}</td>
       <td>${escapeHtml(s.file || '')}${s.line_start ? ':' + s.line_start : ''}</td>
       <td><span class="badge badge-${conf}">${conf}</span></td>
-      <td style="font-size:12px;color:#64748b;">${escapeHtml(s.review_hint || '')}</td>
-    `;
+      <td style="font-size:12px;color:#64748b;">${escapeHtml(s.review_hint || '')}</td>`;
     tbody.appendChild(tr);
   }
   table.appendChild(tbody);
@@ -694,37 +490,25 @@ function renderDeadCode(data) {
 function renderDependencyCycles(data) {
   const summary = document.createElement('div');
   summary.style.marginBottom = '16px';
-  summary.innerHTML = `
-    <span class="badge badge-info">扫描文件 ${data.total_files_scanned || 0}</span>
+  summary.innerHTML = `<span class="badge badge-info">扫描文件 ${data.total_files_scanned || 0}</span>
     <span class="badge badge-info" style="margin-left:6px;">依赖边 ${data.total_edges || 0}</span>
-    <span class="badge ${data.total_cycles > 0 ? 'badge-high' : 'badge-success'}" style="margin-left:6px;">循环 ${data.total_cycles || 0}</span>
-  `;
+    <span class="badge ${data.total_cycles > 0 ? 'badge-high' : 'badge-success'}" style="margin-left:6px;">循环 ${data.total_cycles || 0}</span>`;
   resultContent.appendChild(summary);
 
   const cycles = data.cycles || [];
-  if (cycles.length === 0) {
-    resultContent.appendChild(emptyState('未发现循环依赖'));
-    return;
-  }
+  if (cycles.length === 0) return resultContent.appendChild(emptyState('未发现循环依赖'));
 
   cycles.forEach((cycle, idx) => {
     const card = document.createElement('div');
     card.style.cssText = 'border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin-bottom:12px;';
-
-    const header = document.createElement('div');
-    header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;';
-    header.innerHTML = `
+    card.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
       <strong style="color:#1e293b;">循环 ${idx + 1} · ${cycle.size} 个文件</strong>
       <span class="badge badge-${cycle.severity || 'low'}">${cycle.severity || 'low'}</span>
-    `;
-    card.appendChild(header);
-
+    </div>`;
     const list = document.createElement('ul');
-    list.style.cssText = 'margin:8px 0 0 22px;font-size:13px;font-family:"SF Mono",Consolas,monospace;color:#4f46e5;';
+    list.style.cssText = 'margin:8px 0 0 22px;font-size:13px;font-family:monospace;color:#4f46e5;';
     for (const f of (cycle.files || [])) {
-      const li = document.createElement('li');
-      li.textContent = f;
-      list.appendChild(li);
+      const li = document.createElement('li'); li.textContent = f; list.appendChild(li);
     }
     card.appendChild(list);
     resultContent.appendChild(card);
@@ -738,27 +522,20 @@ function renderBusinessFlows(data) {
   resultContent.appendChild(disclaimer);
 
   const flows = data.flows || [];
-  if (flows.length === 0) {
-    resultContent.appendChild(emptyState('未识别出业务流程'));
-    return;
-  }
+  if (flows.length === 0) return resultContent.appendChild(emptyState('未识别出业务流程'));
 
   flows.forEach((flow, idx) => {
     const card = document.createElement('div');
     card.style.cssText = 'border:1px solid #e2e8f0;border-radius:8px;padding:18px;margin-bottom:14px;';
-
-    const title = document.createElement('div');
-    title.style.cssText = 'font-size:15px;font-weight:600;color:#4f46e5;margin-bottom:6px;';
-    title.textContent = `${idx + 1}. ${flow.name || '未命名流程'}`;
-    card.appendChild(title);
-
+    card.innerHTML = `<div style="font-size:15px;font-weight:600;color:#4f46e5;margin-bottom:6px;">${idx + 1}. ${escapeHtml(flow.name || '未命名流程')}</div>`;
+    
     if (flow.entry_point) {
       const ep = document.createElement('div');
-      ep.style.cssText = 'font-size:12px;color:#94a3b8;font-family:"SF Mono",Consolas,monospace;margin-bottom:10px;';
+      ep.style.cssText = 'font-size:12px;color:#94a3b8;font-family:monospace;margin-bottom:10px;';
       ep.textContent = `入口：${flow.entry_point.symbol || ''} (${flow.entry_point.file || ''}:${flow.entry_point.line || ''})`;
       card.appendChild(ep);
     }
-
+    
     const steps = flow.steps || [];
     if (steps.length > 0) {
       const ol = document.createElement('ol');
@@ -767,7 +544,7 @@ function renderBusinessFlows(data) {
         const li = document.createElement('li');
         li.style.marginBottom = '6px';
         li.innerHTML = `<strong>${escapeHtml(step.name || '')}</strong> — ${escapeHtml(step.description || '')}` +
-          (step.file ? `<br><span style="font-size:11px;color:#94a3b8;font-family:'SF Mono',Consolas,monospace;">${escapeHtml(step.file)}:${step.line || ''}</span>` : '');
+          (step.file ? `<br><span style="font-size:11px;color:#94a3b8;font-family:monospace;">${escapeHtml(step.file)}:${step.line || ''}</span>` : '');
         ol.appendChild(li);
       });
       card.appendChild(ol);
@@ -779,41 +556,28 @@ function renderBusinessFlows(data) {
       sum.textContent = flow.business_summary;
       card.appendChild(sum);
     }
-
     resultContent.appendChild(card);
   });
 }
 
 function renderCapabilityMap(data) {
   const domains = data.domains || [];
-  if (domains.length === 0) {
-    resultContent.appendChild(emptyState('未识别出业务模块'));
-    return;
-  }
-
+  if (domains.length === 0) return resultContent.appendChild(emptyState('未识别出业务模块'));
   const grid = document.createElement('div');
   grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill, minmax(280px, 1fr));gap:16px;';
-
   domains.forEach(d => {
     const card = document.createElement('div');
     card.style.cssText = 'padding:16px;border:1px solid #e2e8f0;border-radius:8px;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,0.05);';
-    
-    card.innerHTML = `
-      <div style="font-size:15px;font-weight:600;color:#4f46e5;margin-bottom:8px;">${escapeHtml(d.name || '')}</div>
-      <div style="font-size:13px;color:#64748b;line-height:1.6;">${escapeHtml(d.description || '')}</div>
-    `;
+    card.innerHTML = `<div style="font-size:15px;font-weight:600;color:#4f46e5;margin-bottom:8px;">${escapeHtml(d.name || '')}</div>
+      <div style="font-size:13px;color:#64748b;line-height:1.6;">${escapeHtml(d.description || '')}</div>`;
     grid.appendChild(card);
   });
-
   resultContent.appendChild(grid);
 }
 
 function renderReport(data) {
   const markdown = data.report_markdown || '';
-  if (!markdown) {
-    resultContent.appendChild(emptyState('报告为空'));
-    return;
-  }
+  if (!markdown) return resultContent.appendChild(emptyState('报告为空'));
   const body = document.createElement('div');
   body.className = 'report-body';
   body.innerHTML = markdownToHtml(markdown);
@@ -824,111 +588,34 @@ function renderReport(data) {
 
 function saveHistory(request, projectPath, result, reportPath) {
   let history = loadHistory();
-  const skills = (result.steps || []).map(s => s.skill);
-  const entry = {
-    id: Date.now(),
-    time: new Date().toLocaleString('zh-CN'),
-    project: projectPath,
-    request: request,
-    skills: skills,
-    result: result,
-    reportPath: reportPath,
-  };
+  const entry = { id: Date.now(), time: new Date().toLocaleString('zh-CN'), project: projectPath, request, skills: result.steps.map(s => s.skill), result, reportPath };
   history.unshift(entry);
-  if (history.length > MAX_HISTORY) {
-    history = history.slice(0, MAX_HISTORY);
-  }
-  try {
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
-  } catch (e) {
-    history = history.slice(0, 3);
-    try { localStorage.setItem(HISTORY_KEY, JSON.stringify(history)); } catch (_) {}
-  }
+  if (history.length > MAX_HISTORY) history = history.slice(0, MAX_HISTORY);
+  try { localStorage.setItem(HISTORY_KEY, JSON.stringify(history)); } catch (e) {}
   renderHistory();
 }
 
-function loadHistory() {
-  try {
-    const raw = localStorage.getItem(HISTORY_KEY);
-    if (!raw) return [];
-    return JSON.parse(raw);
-  } catch (e) {
-    return [];
-  }
-}
-
-function clearHistory() {
-  if (!confirm('确认清空所有历史记录？')) return;
-  localStorage.removeItem(HISTORY_KEY);
-  renderHistory();
-}
+function loadHistory() { try { return JSON.parse(localStorage.getItem(HISTORY_KEY)) || []; } catch (e) { return []; } }
+function clearHistory() { if (confirm('确认清空？')) { localStorage.removeItem(HISTORY_KEY); renderHistory(); } }
 
 function renderHistory() {
   const history = loadHistory();
   historyList.innerHTML = '';
-
-  if (history.length === 0) {
-    historyList.innerHTML = '<div class="empty-state">暂无历史记录</div>';
-    clearHistoryBtn.style.display = 'none';
-    return;
-  }
-
+  if (history.length === 0) { historyList.innerHTML = '<div class="empty-state">暂无历史记录</div>'; clearHistoryBtn.style.display = 'none'; return; }
   clearHistoryBtn.style.display = 'inline-block';
-
   history.forEach(entry => {
-    const item = document.createElement('div');
-    item.className = 'history-item';
-
-    const main = document.createElement('div');
-    main.className = 'history-item-main';
-
-    const title = document.createElement('div');
-    title.className = 'history-item-title';
-    title.textContent = entry.request;
-
-    const meta = document.createElement('div');
-    meta.className = 'history-item-meta';
-    const skillLabels = (entry.skills || []).map(s => SKILL_LABELS[s] || s).join(' · ');
-    meta.textContent = `${entry.time} · ${skillLabels}`;
-
-    main.appendChild(title);
-    main.appendChild(meta);
-
-    const removeBtn = document.createElement('button');
-    removeBtn.className = 'history-item-remove';
-    removeBtn.textContent = '×';
-    removeBtn.title = '删除';
-    removeBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      removeHistory(entry.id);
-    });
-
-    item.appendChild(main);
-    item.appendChild(removeBtn);
-
-    item.addEventListener('click', () => loadHistoryEntry(entry));
+    const item = document.createElement('div'); item.className = 'history-item';
+    item.innerHTML = `<div class="history-item-main"><div class="history-item-title">${escapeHtml(entry.request)}</div>
+      <div class="history-item-meta">${entry.time} · ${entry.skills.map(s => SKILL_LABELS[s] || s).join(' · ')}</div></div>`;
+    const rm = document.createElement('button'); rm.className = 'history-item-remove'; rm.textContent = '×';
+    rm.onclick = (e) => { e.stopPropagation(); let h = loadHistory().filter(x => x.id !== entry.id); localStorage.setItem(HISTORY_KEY, JSON.stringify(h)); renderHistory(); };
+    item.appendChild(rm);
+    item.onclick = () => { currentResult = entry.result; currentProjectPath = entry.project; projectPathInput.value = entry.project; setStatus('已加载历史', 'success'); renderResult(entry.result, entry.reportPath); resultCard.style.display = 'block'; };
     historyList.appendChild(item);
   });
 }
 
-function removeHistory(id) {
-  let history = loadHistory();
-  history = history.filter(h => h.id !== id);
-  localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
-  renderHistory();
-}
-
-function loadHistoryEntry(entry) {
-  currentResult = entry.result;
-  currentProjectPath = entry.project;
-  projectPathInput.value = entry.project;
-  setStatus(`已加载历史记录（${entry.time}）`, 'success');
-  renderResult(entry.result, entry.reportPath);
-  resultCard.style.display = 'block';
-  resultCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
-}
-
-// ---- 导出报告 ----
+// ---- 导出报告 (修复版) ----
 
 function exportReport() {
   if (!currentResult) {
@@ -936,237 +623,137 @@ function exportReport() {
     return;
   }
 
-  const md = buildMarkdownReport(currentResult, currentProjectPath);
-  const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
+  try {
+    const md = buildMarkdownReport(currentResult, currentProjectPath);
+    const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
 
-  const timestamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
-  const filename = `analysis-report-${timestamp}.md`;
+    const timestamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
+    const filename = `analysis-report-${timestamp}.md`;
 
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.style.display = 'none';
+    
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    
+    // 延迟释放 URL，确保下载已开始
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setStatus('报告已开始下载。', 'success');
+  } catch (err) {
+    setStatus('导出失败：' + err.message, 'error');
+  }
 }
 
 function buildMarkdownReport(result, projectPath) {
   const lines = [];
-
   lines.push('# 代码分析报告');
   lines.push('');
   lines.push(`- **项目路径**：\`${projectPath}\``);
   lines.push(`- **生成时间**：${new Date().toLocaleString('zh-CN')}`);
-
   const skills = result.steps ? result.steps.map(s => s.skill) : [];
-  if (skills.length > 0) {
-    lines.push(`- **分析技能**：${skills.join(' → ')}`);
-  }
+  if (skills.length > 0) lines.push(`- **分析技能**：${skills.join(' → ')}`);
   const tokens = result.summary && result.summary.total_tokens;
-  if (tokens) {
-    lines.push(`- **Token 消耗**：${tokens}`);
-  }
-  lines.push('');
-  lines.push('---');
-  lines.push('');
+  if (tokens) lines.push(`- **Token 消耗**：${tokens}`);
+  lines.push('', '---', '');
 
   for (const step of (result.steps || [])) {
-    const skill = step.skill;
     const data = step.result && step.result.data;
     if (!data) continue;
-
-    const section = SKILL_TO_MARKDOWN[skill];
-    if (section) {
-      lines.push(section(data));
-      lines.push('');
-    } else {
-      lines.push(`## ${skill}`);
-      lines.push('');
-      lines.push('```json');
-      lines.push(JSON.stringify(data, null, 2));
-      lines.push('```');
-      lines.push('');
+    const section = SKILL_TO_MARKDOWN[step.skill];
+    if (section) { lines.push(section(data)); lines.push(''); }
+    else {
+      lines.push(`## ${step.skill}`, '', '```json', JSON.stringify(data, null, 2), '```', '');
     }
   }
-
   return lines.join('\n');
 }
 
 const SKILL_TO_MARKDOWN = {
   "project-structure": (data) => {
-    const out = ['## 项目结构', ''];
-    out.push(`- 构建系统：${data.build_system || 'unknown'}`);
-    out.push(`- 文件总数：${data.total_files || 0}`);
-    out.push('');
-    out.push('| 模块 | 文件数 |');
-    out.push('|------|--------|');
-    for (const m of (data.modules || [])) {
-      out.push(`| \`${m.name}\` | ${m.file_count} |`);
-    }
+    const out = ['## 项目结构', '', `- 构建系统：${data.build_system || 'unknown'}`, `- 文件总数：${data.total_files || 0}`, ''];
+    out.push('| 模块 | 文件数 |', '|------|--------|');
+    for (const m of (data.modules || [])) out.push(`| \`${m.name}\` | ${m.file_count} |`);
     return out.join('\n');
   },
-
   "business-rule-extraction": (data) => {
-    const out = ['## 业务规则', ''];
+    const out = ['## 业务规则审计', ''];
     const capabilities = data.capabilities || [];
     const rules = data.rules || [];
-
-    if (rules.length === 0) {
-      out.push('未抽取到业务规则。');
-      return out.join('\n');
-    }
-
-    if (data.stats) {
-      out.push(`扫描决策点 ${data.stats.candidates_scanned || 0} 个，抽取规则 ${data.stats.rules_extracted || 0} 条，识别业务能力 ${data.stats.capabilities_found || 0} 个。`);
-      out.push('');
-    }
+    if (rules.length === 0) return out.concat('未抽取到业务规则。').join('\n');
+    if (data.stats) out.push(`扫描决策点 ${data.stats.candidates_scanned || 0} 个，抽取规则 ${data.stats.rules_extracted || 0} 条。`, '');
+    
+    const printRule = (rule) => {
+      let line = `- **${rule.id || ''}** [${(rule.status || '未标记').toUpperCase()}] ${rule.description || ''}`;
+      if (rule.category) line += `\n  - 分类：${rule.category}`;
+      if (rule.code_reference && rule.code_reference.file) line += `\n  - 位置：\`${rule.code_reference.file}:${rule.code_reference.line_start || ''}\``;
+      if (rule.explanation) line += `\n  - 解释：${rule.explanation}`;
+      return line;
+    };
 
     if (capabilities.length > 0) {
       for (const cap of capabilities) {
-        out.push(`### ${cap.name}（${cap.rule_count} 条）`);
-        out.push('');
-        for (const rule of (cap.rules || [])) {
-          out.push(`- **${rule.id || ''}** ${rule.description || ''}`);
-          if (rule.category) out.push(`  - 分类：${rule.category}`);
-          if (rule.code_reference && rule.code_reference.file) {
-            const line = rule.code_reference.line_start || '';
-            out.push(`  - 位置：\`${rule.code_reference.file}:${line}\``);
-          }
-        }
+        out.push(`### ${cap.name}（${cap.rule_count} 条）`, '');
+        for (const rule of (cap.rules || [])) out.push(printRule(rule));
         out.push('');
       }
     } else {
-      for (const rule of rules) {
-        out.push(`- **${rule.id || ''}** ${rule.description || ''}`);
-        if (rule.code_reference && rule.code_reference.file) {
-          const line = rule.code_reference.line_start || '';
-          out.push(`  - 位置：\`${rule.code_reference.file}:${line}\``);
-        }
-      }
+      for (const rule of rules) out.push(printRule(rule));
     }
     return out.join('\n');
   },
-
   "dead-code-detection": (data) => {
-    const out = ['## 疑似死代码', ''];
-    out.push(`> ${data.disclaimer || ''}`);
-    out.push('');
-    const counts = data.confidence_counts || {};
-    out.push(`置信度分布：高 ${counts.high || 0} · 中 ${counts.medium || 0} · 低 ${counts.low || 0}`);
-    out.push('');
-    out.push('| 符号 | 类型 | 位置 | 置信度 | 复核建议 |');
-    out.push('|------|------|------|--------|----------|');
-    for (const s of (data.dead_symbols || [])) {
-      const loc = `${s.file || ''}${s.line_start ? ':' + s.line_start : ''}`;
-      out.push(`| \`${s.name || ''}\` | ${s.kind || ''} | ${loc} | ${s.confidence || ''} | ${s.review_hint || ''} |`);
-    }
+    const out = ['## 疑似死代码', '', `> ${data.disclaimer || ''}`, ''];
+    out.push('| 符号 | 类型 | 位置 | 置信度 | 复核建议 |', '|------|------|------|--------|----------|');
+    for (const s of (data.dead_symbols || [])) out.push(`| \`${s.name || ''}\` | ${s.kind || ''} | ${s.file || ''}:${s.line_start || ''} | ${s.confidence || ''} | ${s.review_hint || ''} |`);
     return out.join('\n');
   },
-
   "dependency-cycle-detection": (data) => {
-    const out = ['## 循环依赖', ''];
-    out.push(`- 扫描文件：${data.total_files_scanned || 0}`);
-    out.push(`- 依赖边：${data.total_edges || 0}`);
-    out.push(`- 循环数量：${data.total_cycles || 0}`);
-    out.push('');
+    const out = ['## 循环依赖', '', `- 循环数量：${data.total_cycles || 0}`, ''];
     for (let i = 0; i < (data.cycles || []).length; i++) {
-      const c = data.cycles[i];
-      out.push(`### 循环 ${i + 1} · 严重程度 ${c.severity || ''}`);
-      out.push('');
-      for (const f of (c.files || [])) {
-        out.push(`- \`${f}\``);
-      }
+      out.push(`### 循环 ${i + 1} · ${data.cycles[i].severity || ''}`, '');
+      for (const f of (data.cycles[i].files || [])) out.push(`- \`${f}\``);
       out.push('');
     }
     return out.join('\n');
   },
-
   "call-chain": (data) => {
-    const out = ['## 调用链分析', ''];
-    out.push(`**目标**：\`${data.target || '—'}\``);
-    out.push('');
+    const out = ['## 调用链分析', '', `**目标**：\`${data.target || '—'}\``, ''];
     const callers = Array.isArray(data.callers) ? data.callers : (data.callers?.callers || []);
     const callees = Array.isArray(data.callees) ? data.callees : (data.callees?.callees || []);
-    if (callers.length > 0) {
-      out.push('### 调用者');
-      out.push('');
-      for (const c of callers) {
-        const loc = `${c.filePath || c.file || ''}${c.startLine ? ':' + c.startLine : ''}`;
-        out.push(`- \`${c.name || c.symbol || ''}\` — ${loc}`);
-      }
-      out.push('');
-    }
-    if (callees.length > 0) {
-      out.push('### 被调用者');
-      out.push('');
-      for (const c of callees) {
-        const loc = `${c.filePath || c.file || ''}${c.startLine ? ':' + c.startLine : ''}`;
-        out.push(`- \`${c.name || c.symbol || ''}\` — ${loc}`);
-      }
-      out.push('');
-    }
+    if (callers.length > 0) { out.push('### 调用者', ''); for (const c of callers) out.push(`- \`${c.name || c.symbol || ''}\` — ${c.filePath || c.file || ''}:${c.startLine || ''}`); out.push(''); }
+    if (callees.length > 0) { out.push('### 被调用者', ''); for (const c of callees) out.push(`- \`${c.name || c.symbol || ''}\` — ${c.filePath || c.file || ''}:${c.startLine || ''}`); out.push(''); }
     return out.join('\n');
   },
-
   "impact-analysis": (data) => {
-    const out = ['## 影响分析', ''];
-    out.push(`- 目标：\`${data.target || '—'}\``);
-    out.push(`- 风险等级：${data.risk_level || '—'}`);
-    out.push(`- 受影响符号数：${data.total_affected || 0}`);
-    out.push('');
-    const affected = data.affected || [];
-    if (affected.length > 0) {
-      out.push('| 符号 | 类型 | 文件 |');
-      out.push('|------|------|------|');
-      for (const a of affected) {
-        const loc = `${a.filePath || a.file || ''}${a.startLine ? ':' + a.startLine : ''}`;
-        out.push(`| \`${a.name || ''}\` | ${a.kind || ''} | ${loc} |`);
-      }
+    const out = ['## 影响分析', '', `- 目标：\`${data.target || '—'}\``, `- 风险等级：${data.risk_level || '—'}`, `- 受影响符号数：${data.total_affected || 0}`, ''];
+    if ((data.affected || []).length > 0) {
+      out.push('| 符号 | 类型 | 文件 |', '|------|------|------|');
+      for (const a of data.affected) out.push(`| \`${a.name || ''}\` | ${a.kind || ''} | ${a.filePath || a.file || ''}:${a.startLine || ''} |`);
     }
     return out.join('\n');
   },
-
   "business-flow-reconstruction": (data) => {
     const out = ['## 业务流程', ''];
-    if (data.disclaimer) {
-      out.push(`> ${data.disclaimer}`);
-      out.push('');
-    }
+    if (data.disclaimer) out.push(`> ${data.disclaimer}`, '');
     for (const flow of (data.flows || [])) {
-      out.push(`### ${flow.name || '未命名流程'}`);
+      out.push(`### ${flow.name || '未命名流程'}`, '');
+      if (flow.entry_point) out.push(`**入口**：\`${flow.entry_point.symbol || ''}\` (${flow.entry_point.file || ''}:${flow.entry_point.line || ''})`, '');
+      for (const step of (flow.steps || [])) out.push(`${step.order || ''}. **${step.name || ''}** — ${step.description || ''} (\`${step.file || ''}:${step.line || ''}\`)`);
       out.push('');
-      if (flow.entry_point) {
-        out.push(`**入口**：\`${flow.entry_point.symbol || ''}\` (${flow.entry_point.file || ''}:${flow.entry_point.line || ''})`);
-        out.push('');
-      }
-      for (const step of (flow.steps || [])) {
-        const loc = step.file ? ` (\`${step.file}:${step.line || ''}\`)` : '';
-        out.push(`${step.order || ''}. **${step.name || ''}** — ${step.description || ''}${loc}`);
-      }
-      out.push('');
-      if (flow.business_summary) {
-        out.push(`**业务总结**：${flow.business_summary}`);
-        out.push('');
-      }
+      if (flow.business_summary) out.push(`**业务总结**：${flow.business_summary}`, '');
     }
     return out.join('\n');
   },
-
   "business-capability-map": (data) => {
     const out = ['## 业务能力全景', ''];
-    for (const d of (data.domains || [])) {
-      out.push(`### ${d.name}`);
-      out.push(d.description || '');
-      out.push('');
-    }
+    for (const d of (data.domains || [])) { out.push(`### ${d.name}`, d.description || '', ''); }
     return out.join('\n');
   },
-
-  "report-generation": (data) => {
-    return data.report_markdown || '';
-  },
+  "report-generation": (data) => data.report_markdown || ''
 };
 
 // ---- 工具函数 ----
@@ -1185,19 +772,14 @@ function escapeHtml(text) {
 }
 
 function markdownToHtml(md) {
+  // 简单的 Markdown 解析器，用于把大模型返回的 Markdown 转成 HTML 进行展示
   const lines = md.split('\n');
   const out = [];
   let inList = null;
   let inTable = false;
   let tableRows = [];
 
-  function flushList() {
-    if (inList) {
-      out.push(`</${inList}>`);
-      inList = null;
-    }
-  }
-
+  function flushList() { if (inList) { out.push(`</${inList}>`); inList = null; } }
   function flushTable() {
     if (inTable && tableRows.length > 0) {
       const html = ['<table class="data-table">'];
@@ -1207,67 +789,36 @@ function markdownToHtml(md) {
       });
       html.push('</table>');
       out.push(html.join(''));
-      tableRows = [];
-      inTable = false;
+      tableRows = []; inTable = false;
     }
   }
 
   for (let line of lines) {
     const trimmed = line.trim();
-
     if (trimmed.startsWith('|') && trimmed.endsWith('|')) {
       const cells = trimmed.slice(1, -1).split('|').map(c => c.trim());
       if (cells.every(c => /^[-:]+$/.test(c))) continue;
-      flushList();
-      inTable = true;
-      tableRows.push(cells);
-      continue;
-    } else {
-      flushTable();
-    }
+      flushList(); inTable = true; tableRows.push(cells); continue;
+    } else { flushTable(); }
 
     const hMatch = trimmed.match(/^(#{1,3})\s+(.+)$/);
-    if (hMatch) {
-      flushList();
-      const level = hMatch[1].length;
-      out.push(`<h${level}>${inlineMarkdown(hMatch[2])}</h${level}>`);
-      continue;
-    }
-
-    if (/^---+$/.test(trimmed)) {
-      flushList();
-      out.push('<hr>');
-      continue;
-    }
-
+    if (hMatch) { flushList(); out.push(`<h${hMatch[1].length}>${inlineMarkdown(hMatch[2])}</h${hMatch[1].length}>`); continue; }
+    if (/^---+$/.test(trimmed)) { flushList(); out.push('<hr>'); continue; }
     if (/^[-*+]\s+/.test(trimmed)) {
       if (inList !== 'ul') { flushList(); out.push('<ul>'); inList = 'ul'; }
-      out.push(`<li>${inlineMarkdown(trimmed.replace(/^[-*+]\s+/, ''))}</li>`);
-      continue;
+      out.push(`<li>${inlineMarkdown(trimmed.replace(/^[-*+]\s+/, ''))}</li>`); continue;
     }
-
     if (/^\d+\.\s+/.test(trimmed)) {
       if (inList !== 'ol') { flushList(); out.push('<ol>'); inList = 'ol'; }
-      out.push(`<li>${inlineMarkdown(trimmed.replace(/^\d+\.\s+/, ''))}</li>`);
-      continue;
+      out.push(`<li>${inlineMarkdown(trimmed.replace(/^\d+\.\s+/, ''))}</li>`); continue;
     }
-
-    if (!trimmed) {
-      flushList();
-      continue;
-    }
-
-    flushList();
-    out.push(`<p>${inlineMarkdown(trimmed)}</p>`);
+    if (!trimmed) { flushList(); continue; }
+    flushList(); out.push(`<p>${inlineMarkdown(trimmed)}</p>`);
   }
-
-  flushList();
-  flushTable();
+  flushList(); flushTable();
   return out.join('\n');
 }
 
 function inlineMarkdown(text) {
-  return escapeHtml(text)
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/`([^`]+)`/g, '<code>$1</code>');
+  return escapeHtml(text).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/`([^`]+)`/g, '<code>$1</code>');
 }

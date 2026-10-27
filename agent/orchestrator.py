@@ -8,26 +8,29 @@ from .llm_client import LLMClient
 
 ProgressCallback = Optional[Callable[[str, dict], None]]
 
-
 class LLMSelector:
     def __init__(self, llm: LLMClient):
         self.llm = llm
 
-    def select_with_params(self, user_request: str, skills: List[SkillMeta]) -> dict:
+    def select_with_params(self, user_request: str, skills: List[SkillMeta], has_business_doc: bool) -> dict:
         if not skills:
             return {"skills": [], "params": {}, "clarification": None}
+        
+        # 如果只有1个技能，或者用户带了文档并且只想要规则提取
         if len(skills) == 1:
             return {"skills": [skills[0]], "params": {}, "clarification": None}
 
         skill_list = "\n".join(f"- {s.name}: {s.description}" for s in skills)
+        
+        doc_hint = "注意：用户提供了业务文档/背景，请优先选择 `business-rule-extraction` 技能进行代码与文档的交叉验证。\n" if has_business_doc else ""
 
         system = (
             "你是一个任务调度器。根据用户的自然语言请求，选择要执行的技能，并提取参数。\n"
+            f"{doc_hint}"
             "参数提取规则：\n"
             "- call-chain 和 impact-analysis 需要 symbol 参数\n"
             "- business-rule-extraction 可选 focus 参数（英文数组，如 ['order', 'coupon']）\n"
             "- 其他技能不需要参数\n\n"
-            "如果请求太模糊，将 clarification 设为提示语。\n\n"
             "输出 JSON：\n"
             "{\n"
             "  \"skills\": [\"技能名\"],\n"
@@ -42,26 +45,30 @@ class LLMSelector:
             skill_names = result.get("skills", [])
             params = result.get("params", {}) or {}
             clarification = result.get("clarification")
+            
+            # 如果用户提供了文档，但没选规则提取，强行加上（业务审计的核心）
+            if has_business_doc and "business-rule-extraction" not in skill_names:
+                skill_names.append("business-rule-extraction")
+
             selected = [s for name in skill_names for s in skills if s.name == name]
             return {"skills": selected, "params": params, "clarification": clarification}
         except Exception:
             return {"skills": [], "params": {}, "clarification": None}
 
-
 class KeywordSelector:
     KEYWORD_MAP = {
-        "project-structure": ["结构", "模块", "目录", "组织", "架构", "structure"],
-        "call-chain": ["调用", "调用链", "call", "chain"],
-        "impact-analysis": ["影响", "风险", "改", "impact", "risk"],
-        "business-rule-extraction": ["业务", "规则", "业务逻辑", "business"],
-        "dead-code-detection": ["死代码", "未使用", "冗余", "dead", "unused"],
-        "dependency-cycle-detection": ["循环依赖", "循环", "环路", "cycle", "circular"],
-        "business-flow-reconstruction": ["流程", "业务流程", "工作流", "flow", "process", "workflow"],
-        "business-capability-map": ["全景", "业务能力", "系统概览", "能力地图", "map"],
-        "report-generation": ["报告", "总结", "report", "summary"],
+        "project-structure": ["结构", "模块", "目录"],
+        "call-chain": ["调用", "调用链"],
+        "impact-analysis": ["影响", "风险", "改"],
+        "business-rule-extraction": ["业务", "规则", "审计", "交叉", "文档"],
+        "dead-code-detection": ["死代码", "未使用"],
+        "dependency-cycle-detection": ["循环依赖", "循环"],
+        "business-flow-reconstruction": ["流程", "业务流程", "工作流"],
+        "business-capability-map": ["全景", "业务能力", "系统概览"],
+        "report-generation": ["报告", "总结"],
     }
 
-    def select_with_params(self, user_request: str, skills: List[SkillMeta]) -> dict:
+    def select_with_params(self, user_request: str, skills: List[SkillMeta], has_business_doc: bool) -> dict:
         request_lower = user_request.lower()
         selected = []
         for skill in skills:
@@ -69,7 +76,6 @@ class KeywordSelector:
             if any(kw in request_lower for kw in keywords):
                 selected.append(skill)
         return {"skills": selected, "params": {}, "clarification": None}
-
 
 class Orchestrator:
     def __init__(self, skills_root: str, llm: Optional[LLMClient] = None):
@@ -88,21 +94,19 @@ class Orchestrator:
             self.load_skills()
         return [{"name": s.name, "description": s.description, "depends_on": s.depends_on} for s in self.skills]
 
-    def select_skills(self, user_request: str) -> dict:
-        return self.selector.select_with_params(user_request, self.skills)
+    def select_skills(self, user_request: str, has_business_doc: bool) -> dict:
+        return self.selector.select_with_params(user_request, self.skills, has_business_doc)
 
     def resolve_dependencies_to_levels(self, selected: List[SkillMeta]) -> List[List[SkillMeta]]:
         visited = {}
         by_name = {s.name: s for s in self.skills}
         
         def get_level(skill):
-            if skill.name in visited:
-                return visited[skill.name]
+            if skill.name in visited: return visited[skill.name]
             max_dep_level = -1
             for dep_name in skill.depends_on:
                 dep = by_name.get(dep_name)
-                if dep:
-                    max_dep_level = max(max_dep_level, get_level(dep))
+                if dep: max_dep_level = max(max_dep_level, get_level(dep))
             level = max_dep_level + 1
             visited[skill.name] = level
             return level
@@ -113,38 +117,34 @@ class Orchestrator:
             levels_dict.setdefault(lvl, []).append(s)
         return [levels_dict[lvl] for lvl in sorted(levels_dict.keys())]
 
-    def execute_skill(self, skill: SkillMeta, user_request: str, project_path: str, params: dict, previous_results: dict) -> tuple:
+    def execute_skill(self, skill: SkillMeta, user_request: str, project_path: str, params: dict, previous_results: dict, business_doc: str) -> tuple:
         try:
             input_data = {
                 "project_path": os.path.abspath(project_path),
                 "user_request": user_request,
                 "params": params,
                 "previous_results": previous_results,
+                "business_doc": business_doc, # 传递给技能
             }
             result = self.runner.run(skill, input_data)
             return skill, result
         except Exception as e:
             return skill, {"status": "error", "error": f"Internal Error: {str(e)}"}
 
-    def run(self, user_request: str, project_path: str, progress_callback: ProgressCallback = None) -> dict:
+    def run(self, user_request: str, project_path: str, business_doc: str = "", progress_callback: ProgressCallback = None) -> dict:
         if not self.skills:
             self.load_skills()
 
         if progress_callback:
-            progress_callback("selecting", {"message": "正在理解你的需求..."})
+            progress_callback("selecting", {"message": "正在理解需求..."})
 
-        selection = self.select_skills(user_request)
+        selection = self.select_skills(user_request, bool(business_doc))
         selected = selection.get("skills", [])
         params = selection.get("params", {}) or {}
         clarification = selection.get("clarification")
 
         if not selected:
-            return {
-                "success": False,
-                "error": "no matching skill",
-                "clarification": clarification or "无法理解您的请求，请尝试提供更详细的描述。",
-                "available_skills": [s.name for s in self.skills],
-            }
+            return {"success": False, "error": "no matching skill", "clarification": clarification or "无法理解请求"}
 
         levels = self.resolve_dependencies_to_levels(selected)
         all_executed_names = [s.name for lvl in levels for s in lvl]
@@ -167,7 +167,7 @@ class Orchestrator:
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
                 futures = {
-                    executor.submit(self.execute_skill, s, user_request, project_path, params, previous_results): s
+                    executor.submit(self.execute_skill, s, user_request, project_path, params, previous_results, business_doc): s
                     for s in level_skills
                 }
                 
@@ -185,7 +185,6 @@ class Orchestrator:
                         previous_results[skill.name] = result.get("data", {})
                     
                     steps.append({"skill": skill.name, "result": result})
-                    
                     if progress_callback:
                         progress_callback("skill_done", {"skill": skill.name, "status": status})
 

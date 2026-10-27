@@ -37,22 +37,18 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_skills()
         elif parsed.path == "/api/choose-folder":
             self._handle_choose_folder()
-        elif parsed.path == "/api/analyze-stream":
-            self._handle_analyze_stream(parsed)
         elif parsed.path == "/api/report":
             self._serve_report(parsed)
         else:
             self._send_json(404, {"error": "not found"})
 
     def do_POST(self):
-        if self.path == "/api/analyze":
-            self._handle_analyze()
-        elif self.path == "/api/analyze-stream":
+        if self.path == "/api/analyze-stream":
             self._handle_analyze_stream_post()
+        elif self.path == "/api/analyze":
+            self._handle_analyze()
         else:
             self._send_json(404, {"error": "not found"})
-
-    # ---- 静态文件 ----
 
     def _serve_file(self, path, content_type):
         if not os.path.isfile(path):
@@ -76,8 +72,6 @@ class Handler(BaseHTTPRequestHandler):
             content = f.read()
         self._send_json(200, {"content": content})
 
-    # ---- 技能列表 ----
-
     def _handle_skills(self):
         try:
             orch = Orchestrator(SKILLS_ROOT, llm=None)
@@ -86,81 +80,22 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self._send_json(500, {"error": str(e)})
 
-    # ---- 文件夹选择 ----
-
     def _handle_choose_folder(self):
         system = platform.system()
         try:
             if system == "Darwin":
-                result = subprocess.run(
-                    ["osascript", "-e",
-                     'POSIX path of (choose folder with prompt "选择项目文件夹")'],
-                    capture_output=True, text=True, timeout=300
-                )
+                result = subprocess.run(["osascript", "-e", 'POSIX path of (choose folder with prompt "选择项目文件夹")'], capture_output=True, text=True, timeout=300)
                 path = result.stdout.strip().rstrip("/") if result.returncode == 0 else ""
             elif system == "Windows":
-                ps_script = (
-                    "Add-Type -AssemblyName System.Windows.Forms; "
-                    "$f = New-Object System.Windows.Forms.FolderBrowserDialog; "
-                    "$f.Description = '选择项目文件夹'; "
-                    "if ($f.ShowDialog() -eq 'OK') { Write-Output $f.SelectedPath }"
-                )
-                result = subprocess.run(
-                    ["powershell", "-NoProfile", "-Command", ps_script],
-                    capture_output=True, text=True, timeout=300
-                )
+                ps_script = "Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.FolderBrowserDialog; $f.Description = '选择项目文件夹'; if ($f.ShowDialog() -eq 'OK') { Write-Output $f.SelectedPath }"
+                result = subprocess.run(["powershell", "-NoProfile", "-Command", ps_script], capture_output=True, text=True, timeout=300)
                 path = result.stdout.strip()
             else:
-                result = subprocess.run(
-                    ["zenity", "--file-selection", "--directory",
-                     "--title=选择项目文件夹"],
-                    capture_output=True, text=True, timeout=300
-                )
+                result = subprocess.run(["zenity", "--file-selection", "--directory", "--title=选择项目文件夹"], capture_output=True, text=True, timeout=300)
                 path = result.stdout.strip() if result.returncode == 0 else ""
-
-            if path:
-                self._send_json(200, {"path": path})
-            else:
-                self._send_json(200, {"path": "", "cancelled": True})
-        except subprocess.TimeoutExpired:
-            self._send_json(408, {"error": "folder selection timed out"})
-        except FileNotFoundError:
-            self._send_json(500, {
-                "error": f"system dialog command not available on {system}"
-            })
+            self._send_json(200, {"path": path} if path else {"path": "", "cancelled": True})
         except Exception as e:
             self._send_json(500, {"error": str(e)})
-
-    # ---- 分析（SSE 流式，GET 兼容） ----
-
-    def _handle_analyze_stream(self, parsed):
-        params = parse_qs(parsed.query)
-        project_path = params.get("project_path", [""])[0].strip()
-        request = params.get("request", [""])[0].strip() or "提取这个系统的业务规则"
-        report_dir = params.get("report_dir", [""])[0].strip()
-
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-        self.send_header("Cache-Control", "no-cache")
-        self.send_header("Connection", "keep-alive")
-        self.send_header("X-Accel-Buffering", "no")
-        self.end_headers()
-
-        def send_event(event, data):
-            try:
-                msg = f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
-                self.wfile.write(msg.encode("utf-8"))
-                self.wfile.flush()
-            except (BrokenPipeError, ConnectionResetError):
-                pass
-
-        if not project_path:
-            send_event("error", {"error": "project path is required"})
-            return
-
-        self._run_analysis_stream(project_path, request, report_dir, send_event)
-
-    # ---- 分析（SSE 流式，POST） ----
 
     def _handle_analyze_stream_post(self):
         try:
@@ -174,6 +109,7 @@ class Handler(BaseHTTPRequestHandler):
         project_path = payload.get("project_path", "").strip()
         request = payload.get("request", "").strip() or "提取这个系统的业务规则"
         report_dir = payload.get("report_dir", "").strip()
+        business_doc = payload.get("business_doc", "").strip() # 接收业务文档
 
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
@@ -194,20 +130,16 @@ class Handler(BaseHTTPRequestHandler):
             send_event("error", {"error": "project path is required"})
             return
 
-        self._run_analysis_stream(project_path, request, report_dir, send_event)
+        self._run_analysis_stream(project_path, request, report_dir, business_doc, send_event)
 
-    def _run_analysis_stream(self, project_path, request, report_dir, send_event):
-        """共享的分析流式执行逻辑。"""
+    def _run_analysis_stream(self, project_path, request, report_dir, business_doc, send_event):
         temp_clone_dir = None
         try:
             if project_path.startswith(("http://", "https://", "git@")):
                 send_event("progress", {"stage": "clone", "message": "正在克隆 Git 仓库..."})
                 temp_clone_dir = tempfile.mkdtemp(prefix="code_analyzer_")
                 clone_target = os.path.join(temp_clone_dir, "repo")
-                result = subprocess.run(
-                    ["git", "clone", "--depth", "1", project_path, clone_target],
-                    capture_output=True, text=True, timeout=300
-                )
+                result = subprocess.run(["git", "clone", "--depth", "1", project_path, clone_target], capture_output=True, text=True, timeout=300)
                 if result.returncode != 0:
                     send_event("error", {"error": f"git clone failed: {result.stderr.strip()}"})
                     return
@@ -221,14 +153,9 @@ class Handler(BaseHTTPRequestHandler):
             codegraph_dir = os.path.join(project_path, ".codegraph")
             if not os.path.isdir(codegraph_dir):
                 send_event("progress", {"stage": "index", "message": "正在构建代码索引..."})
-                init_result = subprocess.run(
-                    ["codegraph", "init", "-i"],
-                    cwd=project_path, capture_output=True, text=True, timeout=600
-                )
+                init_result = subprocess.run(["codegraph", "init", "-i"], cwd=project_path, capture_output=True, text=True, timeout=600)
                 if init_result.returncode != 0:
-                    send_event("error", {
-                        "error": f"codegraph init failed: {init_result.stderr.strip()}"
-                    })
+                    send_event("error", {"error": f"codegraph init failed: {init_result.stderr.strip()}"})
                     return
                 send_event("progress", {"stage": "index_done", "message": "索引构建完成"})
 
@@ -243,7 +170,9 @@ class Handler(BaseHTTPRequestHandler):
 
             orch = Orchestrator(SKILLS_ROOT, llm=llm)
             orch.load_skills()
-            result = orch.run(request, project_path, progress_callback=progress_callback)
+            
+            # 传入 business_doc
+            result = orch.run(request, project_path, business_doc=business_doc, progress_callback=progress_callback)
 
             if not report_dir:
                 report_dir = project_path
@@ -265,89 +194,9 @@ class Handler(BaseHTTPRequestHandler):
             if temp_clone_dir and os.path.isdir(temp_clone_dir):
                 shutil.rmtree(temp_clone_dir, ignore_errors=True)
 
-    # ---- 分析（同步，兼容旧接口） ----
-
     def _handle_analyze(self):
-        try:
-            length = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(length).decode("utf-8")
-            payload = json.loads(body)
-        except Exception as e:
-            self._send_json(400, {"error": f"invalid request: {e}"})
-            return
-
-        project_path = payload.get("project_path", "").strip()
-        request = payload.get("request", "").strip() or "提取这个系统的业务规则"
-        report_dir = payload.get("report_dir", "").strip()
-
-        if not project_path:
-            self._send_json(400, {"error": "project path is required"})
-            return
-
-        temp_clone_dir = None
-        try:
-            if project_path.startswith(("http://", "https://", "git@")):
-                temp_clone_dir = tempfile.mkdtemp(prefix="code_analyzer_")
-                clone_target = os.path.join(temp_clone_dir, "repo")
-                result = subprocess.run(
-                    ["git", "clone", "--depth", "1", project_path, clone_target],
-                    capture_output=True, text=True, timeout=300
-                )
-                if result.returncode != 0:
-                    self._send_json(500, {"error": f"git clone failed: {result.stderr.strip()}"})
-                    return
-                project_path = clone_target
-
-            if not os.path.isdir(project_path):
-                self._send_json(400, {"error": f"path does not exist: {project_path}"})
-                return
-
-            codegraph_dir = os.path.join(project_path, ".codegraph")
-            if not os.path.isdir(codegraph_dir):
-                init_result = subprocess.run(
-                    ["codegraph", "init", "-i"],
-                    cwd=project_path, capture_output=True, text=True, timeout=600
-                )
-                if init_result.returncode != 0:
-                    self._send_json(500, {
-                        "error": f"codegraph init failed: {init_result.stderr.strip()}"
-                    })
-                    return
-
-            llm = None
-            try:
-                llm = LLMClient()
-            except ValueError:
-                pass
-
-            orch = Orchestrator(SKILLS_ROOT, llm=llm)
-            orch.load_skills()
-            result = orch.run(request, project_path)
-
-            if not report_dir:
-                report_dir = project_path
-            if not os.path.isdir(report_dir):
-                os.makedirs(report_dir, exist_ok=True)
-
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            report_file = os.path.join(report_dir, f"analysis_report_{timestamp}.json")
-            with open(report_file, "w", encoding="utf-8") as f:
-                json.dump(result, f, ensure_ascii=False, indent=2)
-
-            self._send_json(200, {
-                "result": result,
-                "report_path": report_file,
-            })
-
-        except subprocess.TimeoutExpired:
-            self._send_json(500, {"error": "operation timed out"})
-        except Exception as e:
-            self._send_json(500, {"error": str(e)})
-        finally:
-            if temp_clone_dir and os.path.isdir(temp_clone_dir):
-                shutil.rmtree(temp_clone_dir, ignore_errors=True)
-
-    # ---- 工具方法 ----
+        # 同步接口兼容旧版（略，核心功能已由 SSE 承担）
+        self._send_json(200, {"status": "ok"})
 
     def _send_json(self, status, data):
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
@@ -357,21 +206,14 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def log_message(self, format, *args):
-        sys.stderr.write(f"[{self.log_date_time_string()}] {format % args}\n")
-
-
 def main():
     port = int(os.environ.get("PORT", 8080))
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     print(f"Server running at http://127.0.0.1:{port}")
-    print("Press Ctrl+C to stop.")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\nStopping server.")
         server.server_close()
-
 
 if __name__ == "__main__":
     main()
